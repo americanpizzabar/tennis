@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#1B5E20"
+        android:pathData="M0,0h108v108h-108z" />
+    <!-- Tennis ball -->
+    <circle android:fillColor="#F9A825" android:cx="54" android:cy="54" android:r="28" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:pathData="M26,54 Q40,40 54,54 Q68,68 82,54"
+        android:fillColor="@android:color/transparent" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:pathData="M26,54 Q40,68 54,54 Q68,40 82,54"
+        android:fillColor="@android:color/transparent" />
+</vector>
