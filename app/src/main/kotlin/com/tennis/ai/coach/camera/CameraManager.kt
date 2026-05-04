@@ -105,13 +105,13 @@ class CameraManager @Inject constructor(
 
         val timestamp = imageProxy.imageInfo.timestamp / 1_000_000  // ns → ms
 
-        // bitmap は launch 内で使用後に recycle する（同期 recycle すると競合する）
+        // bitmap は recycle しない：MediaPipe LIVE_STREAM が非同期で参照を保持するため。
+        // GC に任せて安全側に倒す。BallTracker は内部でスケール時にコピーするので影響なし。
         scope.launch {
             runCatching {
                 poseAnalyzer.analyzeFrame(bitmap, timestamp)
                 ballTracker.processFrame(bitmap, timestamp)
             }
-            runCatching { if (!bitmap.isRecycled) bitmap.recycle() }
         }
 
         // FPS計測

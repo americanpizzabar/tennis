@@ -16,13 +16,21 @@ import kotlinx.coroutines.withContext
 import kotlin.math.*
 
 /**
- * MediaPipe PoseLandmarker でスケルトン検知を行い、
- * スイング速度・打点高さ・膝角度をリアルタイム計測する。
+ * MediaPipe PoseLandmarker でスケルトン検知を行う。
+ * モデル `pose_landmarker_full.task` が assets に同梱されていない場合や
+ * 端末側で初期化に失敗した場合は、ダミーデータでフォールバック動作する。
+ *
+ * 注意：
+ * - MediaPipe LIVE_STREAM の `detectAsync` は内部で Bitmap を非同期保持するため、
+ *   呼び出し側で recycle してはいけない。GC に任せる。
+ * - タイムスタンプは厳密単調増加でなければ native 側で SEGV を起こす。
  */
 class PoseAnalyzer(
     @ApplicationContext private val context: Context
 ) {
     private var poseLandmarker: PoseLandmarker? = null
+    private var modelAvailable: Boolean = false
+
     private val _metricsFlow = MutableSharedFlow<PoseMetrics>(replay = 1)
     val metricsFlow: SharedFlow<PoseMetrics> = _metricsFlow
 
@@ -31,8 +39,11 @@ class PoseAnalyzer(
     private var prevWristY: Float = 0f
     private var prevTimestamp: Long = 0L
 
-    // MediaPipe landmark indices
+    // detectAsync 用の単調増加タイムスタンプ
+    @Volatile private var lastSubmittedTs: Long = 0L
+
     private companion object {
+        const val MODEL_ASSET = "pose_landmarker_full.task"
         const val LEFT_SHOULDER = 11
         const val RIGHT_SHOULDER = 12
         const val LEFT_ELBOW = 13
@@ -48,89 +59,114 @@ class PoseAnalyzer(
     }
 
     suspend fun initialize() = withContext(Dispatchers.IO) {
+        // 1) assets にモデルファイルが存在するか確認。なければ MediaPipe を一切触らない。
+        val hasModel = runCatching {
+            context.assets.open(MODEL_ASSET).use { it.read(ByteArray(1)) >= 0 }
+        }.getOrDefault(false)
+        if (!hasModel) {
+            modelAvailable = false
+            poseLandmarker = null
+            return@withContext
+        }
+
+        // 2) PoseLandmarker を作成。失敗したら null のまま。
         runCatching {
             val baseOptions = BaseOptions.builder()
-                .setModelAssetPath("pose_landmarker_full.task")
+                .setModelAssetPath(MODEL_ASSET)
                 .build()
             val options = PoseLandmarker.PoseLandmarkerOptions.builder()
                 .setBaseOptions(baseOptions)
                 .setRunningMode(RunningMode.LIVE_STREAM)
-                .setNumPoses(2)  // player + opponent
+                .setNumPoses(1)
                 .setMinPoseDetectionConfidence(0.5f)
                 .setMinTrackingConfidence(0.5f)
                 .setResultListener { result, _ -> handleResult(result) }
                 .build()
             poseLandmarker = PoseLandmarker.createFromOptions(context, options)
-        }.onFailure { e ->
-            // モデルファイル未同梱時はダミーデータで動作継続
+            modelAvailable = poseLandmarker != null
+        }.onFailure {
+            poseLandmarker = null
+            modelAvailable = false
         }
     }
 
     fun analyzeFrame(bitmap: Bitmap, timestampMs: Long) {
-        val landmarker = poseLandmarker ?: run {
-            // フォールバック：ランダムなメトリクスを生成（デモ用）
+        val landmarker = poseLandmarker
+        if (!modelAvailable || landmarker == null) {
             _metricsFlow.tryEmit(generateDemoMetrics())
             return
         }
+        // タイムスタンプが厳密に増加するよう保証（同じ or 過去だと native crash）
+        val ts = synchronized(this) {
+            val next = if (timestampMs > lastSubmittedTs) timestampMs else lastSubmittedTs + 1
+            lastSubmittedTs = next
+            next
+        }
         runCatching {
-            val mpImage = BitmapImageBuilder(bitmap).build()
-            landmarker.detectAsync(mpImage, timestampMs)
+            // MediaPipe に渡す bitmap は ARGB_8888 で防御コピー。
+            // recycle はしない（detectAsync は非同期）。
+            val safeBitmap = if (bitmap.config == Bitmap.Config.ARGB_8888 && !bitmap.isRecycled) {
+                bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            } else if (!bitmap.isRecycled) {
+                bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            } else {
+                null
+            } ?: return@runCatching
+            val mpImage = BitmapImageBuilder(safeBitmap).build()
+            landmarker.detectAsync(mpImage, ts)
         }.onFailure {
             _metricsFlow.tryEmit(generateDemoMetrics())
         }
     }
 
     private fun handleResult(result: PoseLandmarkerResult) {
-        if (result.landmarks().isEmpty()) return
+        runCatching {
+            if (result.landmarks().isEmpty()) return@runCatching
+            val landmarks = result.landmarks()[0]
+            if (landmarks.size <= RIGHT_ANKLE) return@runCatching
+            val now = System.currentTimeMillis()
 
-        val landmarks = result.landmarks()[0]  // 最初の人物（プレイヤー）
-        val now = System.currentTimeMillis()
+            val wrist = landmarks[RIGHT_WRIST]
+            val shoulder = landmarks[RIGHT_SHOULDER]
+            val hip = landmarks[RIGHT_HIP]
+            val knee = landmarks[RIGHT_KNEE]
+            val ankle = landmarks[RIGHT_ANKLE]
+            val leftShoulder = landmarks[LEFT_SHOULDER]
 
-        // 利き手側の手首（右利き前提、実際はプロファイルから取得）
-        val wrist = landmarks[RIGHT_WRIST]
-        val shoulder = landmarks[RIGHT_SHOULDER]
-        val hip = landmarks[RIGHT_HIP]
-        val knee = landmarks[RIGHT_KNEE]
-        val ankle = landmarks[RIGHT_ANKLE]
+            val dx = wrist.x() - prevWristX
+            val dy = wrist.y() - prevWristY
+            val dt = (now - prevTimestamp).coerceAtLeast(1L)
+            val pixelSpeed = sqrt(dx * dx + dy * dy) / dt
+            val swingSpeedKmh = (pixelSpeed * 3_600_000 / 100f).coerceIn(0f, 250f)
 
-        // スイング速度（ピクセル/ms → km/h の近似）
-        val dx = wrist.x() - prevWristX
-        val dy = wrist.y() - prevWristY
-        val dt = (now - prevTimestamp).coerceAtLeast(1L)
-        val pixelSpeed = sqrt(dx * dx + dy * dy) / dt
-        val swingSpeedKmh = (pixelSpeed * 3_600_000 / 100f).coerceIn(0f, 250f)
+            val impactHeightRatio = 1f - wrist.y()
+            val impactHeightCm = impactHeightRatio * 200f
 
-        // 打点高さ（画面比率 → cm換算。平均身長170cmで正規化）
-        val impactHeightRatio = 1f - wrist.y()  // 0=下, 1=上
-        val impactHeightCm = impactHeightRatio * 200f
-
-        // 膝角度（大腿部と下腿部のなす角）
-        val kneeAngle = calculateAngle(
-            hip.x(), hip.y(),
-            knee.x(), knee.y(),
-            ankle.x(), ankle.y()
-        )
-
-        // 肩の回転（水平方向）
-        val leftShoulder = landmarks[LEFT_SHOULDER]
-        val shoulderRotation = atan2(
-            (shoulder.y() - leftShoulder.y()).toDouble(),
-            (shoulder.x() - leftShoulder.x()).toDouble()
-        ).toFloat() * (180f / PI.toFloat())
-
-        prevWristX = wrist.x()
-        prevWristY = wrist.y()
-        prevTimestamp = now
-
-        _metricsFlow.tryEmit(
-            PoseMetrics(
-                swingSpeedKmh = swingSpeedKmh,
-                impactHeightCm = impactHeightCm,
-                kneeAngleDeg = kneeAngle,
-                shoulderRotationDeg = shoulderRotation,
-                elapsedSinceLastShot = dt
+            val kneeAngle = calculateAngle(
+                hip.x(), hip.y(),
+                knee.x(), knee.y(),
+                ankle.x(), ankle.y()
             )
-        )
+
+            val shoulderRotation = atan2(
+                (shoulder.y() - leftShoulder.y()).toDouble(),
+                (shoulder.x() - leftShoulder.x()).toDouble()
+            ).toFloat() * (180f / PI.toFloat())
+
+            prevWristX = wrist.x()
+            prevWristY = wrist.y()
+            prevTimestamp = now
+
+            _metricsFlow.tryEmit(
+                PoseMetrics(
+                    swingSpeedKmh = swingSpeedKmh,
+                    impactHeightCm = impactHeightCm,
+                    kneeAngleDeg = kneeAngle,
+                    shoulderRotationDeg = shoulderRotation,
+                    elapsedSinceLastShot = dt
+                )
+            )
+        }
     }
 
     private fun calculateAngle(ax: Float, ay: Float, bx: Float, by: Float, cx: Float, cy: Float): Float {
@@ -158,7 +194,8 @@ class PoseAnalyzer(
         start + ((endInclusive - start) * Math.random()).toLong()
 
     fun release() {
-        poseLandmarker?.close()
+        runCatching { poseLandmarker?.close() }
         poseLandmarker = null
+        modelAvailable = false
     }
 }
