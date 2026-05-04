@@ -72,8 +72,12 @@ class PoseAnalyzer(
             _metricsFlow.tryEmit(generateDemoMetrics())
             return
         }
-        val mpImage = BitmapImageBuilder(bitmap).build()
-        landmarker.detectAsync(mpImage, timestampMs)
+        runCatching {
+            val mpImage = BitmapImageBuilder(bitmap).build()
+            landmarker.detectAsync(mpImage, timestampMs)
+        }.onFailure {
+            _metricsFlow.tryEmit(generateDemoMetrics())
+        }
     }
 
     private fun handleResult(result: PoseLandmarkerResult) {
