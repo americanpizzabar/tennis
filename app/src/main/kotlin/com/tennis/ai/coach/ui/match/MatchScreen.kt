@@ -32,10 +32,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 import com.tennis.ai.coach.data.model.*
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun MatchScreen(
     matchTypeStr: String,
@@ -50,7 +53,13 @@ fun MatchScreen(
     var showEndDialog by remember { mutableStateOf(false) }
     var showCameraPreview by remember { mutableStateOf(false) }
 
-    // カメラ接続
+    // カメラ権限（拒否されてもスコア入力は使えるよう、起動はオプション扱い）
+    val cameraPermission = rememberPermissionState(android.Manifest.permission.CAMERA)
+    LaunchedEffect(Unit) {
+        if (!cameraPermission.status.isGranted) cameraPermission.launchPermissionRequest()
+    }
+
+    // カメラ接続（権限が許可された場合のみ）
     val previewView = remember {
         PreviewView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -60,8 +69,10 @@ fun MatchScreen(
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
     }
-    DisposableEffect(lifecycleOwner) {
-        viewModel.startCamera(lifecycleOwner, previewView)
+    DisposableEffect(lifecycleOwner, cameraPermission.status.isGranted) {
+        if (cameraPermission.status.isGranted) {
+            viewModel.startCamera(lifecycleOwner, previewView)
+        }
         onDispose { }
     }
 

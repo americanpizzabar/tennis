@@ -111,8 +111,10 @@ class MatchViewModel @Inject constructor(
 
     fun startCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
         viewModelScope.launch {
-            cameraManager.startCamera(lifecycleOwner, previewView)
-            _uiState.update { it.copy(isCameraActive = true) }
+            val ok = runCatching {
+                cameraManager.startCamera(lifecycleOwner, previewView)
+            }.getOrDefault(false)
+            _uiState.update { it.copy(isCameraActive = ok) }
         }
     }
 

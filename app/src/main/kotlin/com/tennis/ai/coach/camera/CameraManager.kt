@@ -30,7 +30,6 @@ import java.util.concurrent.Executors
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 
 @Singleton
 class CameraManager @Inject constructor(
@@ -58,7 +57,7 @@ class CameraManager @Inject constructor(
         lifecycleOwner: LifecycleOwner,
         previewView: PreviewView,
         lensFacing: Int = CameraSelector.LENS_FACING_BACK
-    ) {
+    ): Boolean = runCatching {
         val cameraProvider = getCameraProvider()
 
         val preview = Preview.Builder()
@@ -73,7 +72,8 @@ class CameraManager @Inject constructor(
             .build()
             .also { analysis ->
                 analysis.setAnalyzer(analysisExecutor) { imageProxy ->
-                    processFrame(imageProxy)
+                    runCatching { processFrame(imageProxy) }
+                        .onFailure { runCatching { imageProxy.close() } }
                 }
             }
 
@@ -86,17 +86,16 @@ class CameraManager @Inject constructor(
             .requireLensFacing(lensFacing)
             .build()
 
-        runCatching {
-            cameraProvider.unbindAll()
-            camera = cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                cameraSelector,
-                preview,
-                imageAnalysis,
-                videoCapture
-            )
-        }
-    }
+        cameraProvider.unbindAll()
+        camera = cameraProvider.bindToLifecycle(
+            lifecycleOwner,
+            cameraSelector,
+            preview,
+            imageAnalysis,
+            videoCapture
+        )
+        true
+    }.getOrDefault(false)
 
     private fun processFrame(imageProxy: ImageProxy) {
         val bitmap = imageProxy.toBitmap() ?: run {
@@ -106,9 +105,13 @@ class CameraManager @Inject constructor(
 
         val timestamp = imageProxy.imageInfo.timestamp / 1_000_000  // ns → ms
 
+        // bitmap は launch 内で使用後に recycle する（同期 recycle すると競合する）
         scope.launch {
-            poseAnalyzer.analyzeFrame(bitmap, timestamp)
-            ballTracker.processFrame(bitmap, timestamp)
+            runCatching {
+                poseAnalyzer.analyzeFrame(bitmap, timestamp)
+                ballTracker.processFrame(bitmap, timestamp)
+            }
+            runCatching { if (!bitmap.isRecycled) bitmap.recycle() }
         }
 
         // FPS計測
@@ -120,7 +123,6 @@ class CameraManager @Inject constructor(
             lastFpsTimestamp = now
         }
 
-        bitmap.recycle()
         imageProxy.close()
     }
 
@@ -164,10 +166,13 @@ class CameraManager @Inject constructor(
     fun setTorch(enabled: Boolean) = camera?.cameraControl?.enableTorch(enabled)
 
     private suspend fun getCameraProvider(): ProcessCameraProvider =
-        suspendCoroutine { cont ->
-            ProcessCameraProvider.getInstance(context).also { future ->
-                future.addListener({ cont.resume(future.get()) }, ContextCompat.getMainExecutor(context))
-            }
+        kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+            val future = ProcessCameraProvider.getInstance(context)
+            future.addListener({
+                runCatching { future.get() }
+                    .onSuccess { provider -> if (cont.isActive) cont.resume(provider) }
+                    .onFailure { e -> if (cont.isActive) cont.resumeWith(Result.failure(e)) }
+            }, ContextCompat.getMainExecutor(context))
         }
 
     fun release() {
