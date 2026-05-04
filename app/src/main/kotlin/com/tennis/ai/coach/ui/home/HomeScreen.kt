@@ -33,7 +33,9 @@ fun HomeScreen(
     onStartMatch: (String) -> Unit,
     onEditProfile: () -> Unit,
     onVideoAnalysis: () -> Unit,
-    onViewReport: (String) -> Unit
+    onViewReport: (String) -> Unit,
+    onOpenTacticalAdvisor: () -> Unit = {},
+    onOpenMultiPhone: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -112,6 +114,24 @@ fun HomeScreen(
                     subtitle = "録画からアドバイスを導き出す",
                     icon = Icons.Default.VideoLibrary,
                     onClick = onVideoAnalysis
+                )
+            }
+
+            item {
+                ActionCard(
+                    title = "戦術アドバイザー",
+                    subtitle = "状況を選ぶだけでプロの戦術が見つかる",
+                    icon = Icons.Default.Lightbulb,
+                    onClick = onOpenTacticalAdvisor
+                )
+            }
+
+            item {
+                ActionCard(
+                    title = "2台連携モード",
+                    subtitle = "もう1台のスマホとBluetooth接続して両陣を撮影",
+                    icon = Icons.Default.PhoneAndroid,
+                    onClick = onOpenMultiPhone
                 )
             }
 

@@ -85,8 +85,8 @@ fun MatchScreen(
     if (uiState.showSetupDialog) {
         PreMatchSetupDialog(
             matchType = uiState.matchType,
-            onConfirm = { opponentName, opponentLevel, partnerName ->
-                viewModel.setupMatch(opponentName, opponentLevel, partnerName)
+            onConfirm = { opponentName, opponentLevel, partnerName, deuceRule ->
+                viewModel.setupMatch(opponentName, opponentLevel, partnerName, deuceRule)
             }
         )
     }
@@ -240,11 +240,12 @@ fun MatchScreen(
 @Composable
 private fun PreMatchSetupDialog(
     matchType: MatchType,
-    onConfirm: (String, PlayerLevel, String) -> Unit
+    onConfirm: (String, PlayerLevel, String, DeuceRule) -> Unit
 ) {
     var opponentName by remember { mutableStateOf("") }
     var partnerName by remember { mutableStateOf("") }
     var selectedLevel by remember { mutableStateOf(PlayerLevel.INTERMEDIATE) }
+    var selectedDeuceRule by remember { mutableStateOf(DeuceRule.STANDARD_AD) }
 
     AlertDialog(
         onDismissRequest = {},
@@ -253,11 +254,13 @@ private fun PreMatchSetupDialog(
                 style = MaterialTheme.typography.titleLarge)
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
                 Text("試合情報を入力してください", color = Color.Gray,
                     style = MaterialTheme.typography.bodySmall)
 
-                // 相手の名前
                 OutlinedTextField(
                     value = opponentName,
                     onValueChange = { opponentName = it },
@@ -271,7 +274,6 @@ private fun PreMatchSetupDialog(
                     )
                 )
 
-                // ダブルスの場合：パートナー名
                 if (matchType == MatchType.DOUBLES) {
                     OutlinedTextField(
                         value = partnerName,
@@ -287,7 +289,6 @@ private fun PreMatchSetupDialog(
                     )
                 }
 
-                // 相手のレベル選択
                 Text("相手の推定レベル", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     PlayerLevel.values().forEach { level ->
@@ -315,11 +316,39 @@ private fun PreMatchSetupDialog(
                         }
                     }
                 }
+
+                Text("デュースルール", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    DeuceRule.values().forEach { rule ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (selectedDeuceRule == rule) Color(0xFF1565C0) else Color(0xFF0D1F1F))
+                                .clickable { selectedDeuceRule = rule }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = selectedDeuceRule == rule,
+                                onClick = { selectedDeuceRule = rule },
+                                colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF42A5F5))
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(rule.displayNameJa, color = Color.White,
+                                    fontWeight = if (selectedDeuceRule == rule) FontWeight.Bold else FontWeight.Normal)
+                                Text(rule.description, color = Color.Gray,
+                                    style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(opponentName, selectedLevel, partnerName) },
+                onClick = { onConfirm(opponentName, selectedLevel, partnerName, selectedDeuceRule) },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
             ) { Text("試合開始！", fontWeight = FontWeight.Bold) }
         },

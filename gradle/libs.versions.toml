@@ -23,6 +23,7 @@ serialization = "1.7.3"
 wearCompose = "1.4.0"
 wearInput = "1.2.0"
 playServicesWearable = "18.2.0"
+playServicesNearby = "19.3.0"
 
 [libraries]
 # AndroidX Core
@@ -91,6 +92,7 @@ wear-compose-material = { group = "androidx.wear.compose", name = "compose-mater
 wear-compose-foundation = { group = "androidx.wear.compose", name = "compose-foundation", version.ref = "wearCompose" }
 wear-input = { group = "androidx.wear", name = "wear-input", version.ref = "wearInput" }
 play-services-wearable = { group = "com.google.android.gms", name = "play-services-wearable", version.ref = "playServicesWearable" }
+play-services-nearby = { group = "com.google.android.gms", name = "play-services-nearby", version.ref = "playServicesNearby" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

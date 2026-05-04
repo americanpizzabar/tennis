@@ -6,11 +6,13 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.tennis.ai.coach.ui.advisor.TacticalAdvisorScreen
 import com.tennis.ai.coach.ui.analysis.VideoAnalysisScreen
+import com.tennis.ai.coach.ui.home.HomeScreen
 import com.tennis.ai.coach.ui.match.MatchScreen
+import com.tennis.ai.coach.ui.peer.MultiPhoneScreen
 import com.tennis.ai.coach.ui.profile.ProfileSetupScreen
 import com.tennis.ai.coach.ui.report.MatchReportScreen
-import com.tennis.ai.coach.ui.home.HomeScreen
 
 sealed class Screen(val route: String) {
     object Home : Screen("home")
@@ -24,6 +26,8 @@ sealed class Screen(val route: String) {
     object MatchReport : Screen("report/{matchId}") {
         fun route(matchId: String) = "report/$matchId"
     }
+    object TacticalAdvisor : Screen("tactical_advisor")
+    object MultiPhone : Screen("multi_phone")
 }
 
 @Composable
@@ -44,8 +48,22 @@ fun TennisNavHost() {
                 },
                 onViewReport = { matchId ->
                     navController.navigate(Screen.MatchReport.route(matchId))
+                },
+                onOpenTacticalAdvisor = {
+                    navController.navigate(Screen.TacticalAdvisor.route)
+                },
+                onOpenMultiPhone = {
+                    navController.navigate(Screen.MultiPhone.route)
                 }
             )
+        }
+
+        composable(Screen.TacticalAdvisor.route) {
+            TacticalAdvisorScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.MultiPhone.route) {
+            MultiPhoneScreen(onBack = { navController.popBackStack() })
         }
 
         composable(

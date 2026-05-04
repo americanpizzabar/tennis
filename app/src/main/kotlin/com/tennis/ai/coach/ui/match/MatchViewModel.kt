@@ -38,6 +38,7 @@ data class MatchUiState(
     val opponentName: String = "相手選手",
     val opponentLevel: PlayerLevel = PlayerLevel.INTERMEDIATE,
     val partnerName: String = "パートナー",
+    val deuceRule: DeuceRule = DeuceRule.STANDARD_AD,
     val playerScore: ScoreState = ScoreState(),
     val opponentScore: ScoreState = ScoreState(),
     val phase: MatchPhase = MatchPhase.POINT,
@@ -88,7 +89,12 @@ class MatchViewModel @Inject constructor(
 
     // ── 試合前セットアップ ─────────────────────────────────────
 
-    fun setupMatch(opponentName: String, opponentLevel: PlayerLevel, partnerName: String = "") {
+    fun setupMatch(
+        opponentName: String,
+        opponentLevel: PlayerLevel,
+        partnerName: String = "",
+        deuceRule: DeuceRule = DeuceRule.STANDARD_AD
+    ) {
         val oName = opponentName.ifBlank { "相手選手" }
         val pName = partnerName.ifBlank { "パートナー" }
         _uiState.update { state ->
@@ -97,6 +103,7 @@ class MatchViewModel @Inject constructor(
                 opponentName = oName,
                 opponentLevel = opponentLevel,
                 partnerName = pName,
+                deuceRule = deuceRule,
                 opponentProfile = state.opponentProfile.copy(
                     name = oName,
                     estimatedLevel = opponentLevel
@@ -165,55 +172,78 @@ class MatchViewModel @Inject constructor(
     }
 
     private fun advanceScore(state: MatchUiState, isPlayer: Boolean): MatchUiState {
-        val pPts = state.playerScore.points
-        val oPts = state.opponentScore.points
+        val winner = if (isPlayer) state.playerScore else state.opponentScore
+        val loser = if (isPlayer) state.opponentScore else state.playerScore
+        val winnerIsServer = (isPlayer && state.servingPlayer == ServingPlayer.PLAYER) ||
+            (!isPlayer && state.servingPlayer == ServingPlayer.OPPONENT)
 
-        if (pPts == TennisPoint.FORTY && oPts == TennisPoint.FORTY) {
-            return if (isPlayer)
-                state.copy(playerScore = state.playerScore.copy(points = TennisPoint.ADVANTAGE), phase = MatchPhase.BREAK_POINT)
-            else
-                state.copy(opponentScore = state.opponentScore.copy(points = TennisPoint.ADVANTAGE))
-        }
-        if (pPts == TennisPoint.ADVANTAGE) {
-            return if (isPlayer) wonGame(state, true)
-            else state.copy(
+        // 1. アドバンテージ保持側が得点 → ゲーム取得
+        if (winner.points == TennisPoint.ADVANTAGE) return wonGame(state, isPlayer)
+
+        // 2. 相手がアドバンテージ → デュースに戻る
+        if (loser.points == TennisPoint.ADVANTAGE) {
+            return state.copy(
                 playerScore = state.playerScore.copy(points = TennisPoint.FORTY),
                 opponentScore = state.opponentScore.copy(points = TennisPoint.FORTY),
                 phase = MatchPhase.POINT
             )
         }
-        if (oPts == TennisPoint.ADVANTAGE) {
-            return if (!isPlayer) wonGame(state, false)
-            else state.copy(
-                playerScore = state.playerScore.copy(points = TennisPoint.FORTY),
-                opponentScore = state.opponentScore.copy(points = TennisPoint.FORTY),
-                phase = MatchPhase.POINT
-            )
-        }
-        if (isPlayer && pPts == TennisPoint.THIRTY) {
-            return if (oPts == TennisPoint.FORTY)
-                state.copy(playerScore = state.playerScore.copy(points = TennisPoint.FORTY), phase = MatchPhase.BREAK_POINT)
-            else
-                state.copy(playerScore = state.playerScore.copy(points = TennisPoint.FORTY),
-                    phase = if (oPts.ordinal <= TennisPoint.THIRTY.ordinal) MatchPhase.GAME_POINT else MatchPhase.POINT)
-        }
-        if (!isPlayer && oPts == TennisPoint.THIRTY) {
-            return if (pPts == TennisPoint.FORTY)
-                state.copy(opponentScore = state.opponentScore.copy(points = TennisPoint.FORTY), phase = MatchPhase.BREAK_POINT)
-            else
-                state.copy(opponentScore = state.opponentScore.copy(points = TennisPoint.FORTY))
-        }
-        val next = { pts: TennisPoint ->
-            when (pts) {
-                TennisPoint.ZERO -> TennisPoint.FIFTEEN
-                TennisPoint.FIFTEEN -> TennisPoint.THIRTY
-                else -> TennisPoint.FORTY
+
+        // 3. 40-40（デュース）
+        if (winner.points == TennisPoint.FORTY && loser.points == TennisPoint.FORTY) {
+            return when (state.deuceRule) {
+                DeuceRule.NO_AD -> wonGame(state, isPlayer)  // 1ポイント決着
+                DeuceRule.STANDARD_AD -> {
+                    val newWinnerScore = winner.copy(points = TennisPoint.ADVANTAGE)
+                    val phase = if (winnerIsServer) MatchPhase.GAME_POINT else MatchPhase.BREAK_POINT
+                    if (isPlayer)
+                        state.copy(playerScore = newWinnerScore, phase = phase)
+                    else
+                        state.copy(opponentScore = newWinnerScore, phase = phase)
+                }
             }
         }
+
+        // 4. 40-X（X<40）で 40 側が得点 → ゲーム取得
+        if (winner.points == TennisPoint.FORTY) return wonGame(state, isPlayer)
+
+        // 5. それ以外は通常の進行（0→15→30→40）
+        val nextPoint = when (winner.points) {
+            TennisPoint.ZERO -> TennisPoint.FIFTEEN
+            TennisPoint.FIFTEEN -> TennisPoint.THIRTY
+            TennisPoint.THIRTY -> TennisPoint.FORTY
+            else -> TennisPoint.FORTY
+        }
+        val newWinnerScore = winner.copy(points = nextPoint)
+        val newPhase = computePhase(
+            winnerPoints = nextPoint,
+            loserPoints = loser.points,
+            winnerIsServer = winnerIsServer,
+            deuceRule = state.deuceRule
+        )
         return if (isPlayer)
-            state.copy(playerScore = state.playerScore.copy(points = next(pPts)))
+            state.copy(playerScore = newWinnerScore, phase = newPhase)
         else
-            state.copy(opponentScore = state.opponentScore.copy(points = next(oPts)))
+            state.copy(opponentScore = newWinnerScore, phase = newPhase)
+    }
+
+    private fun computePhase(
+        winnerPoints: TennisPoint,
+        loserPoints: TennisPoint,
+        winnerIsServer: Boolean,
+        deuceRule: DeuceRule
+    ): MatchPhase {
+        // 40-40 でノーアドの場合は次が決着 → GAME_POINT / BREAK_POINT
+        if (winnerPoints == TennisPoint.FORTY && loserPoints == TennisPoint.FORTY &&
+            deuceRule == DeuceRule.NO_AD
+        ) {
+            return if (winnerIsServer) MatchPhase.GAME_POINT else MatchPhase.BREAK_POINT
+        }
+        // 40-X (X<40) で得点側がサーバー → ゲームポイント
+        if (winnerPoints == TennisPoint.FORTY && loserPoints.ordinal < TennisPoint.FORTY.ordinal) {
+            return if (winnerIsServer) MatchPhase.GAME_POINT else MatchPhase.BREAK_POINT
+        }
+        return MatchPhase.POINT
     }
 
     private fun wonGame(state: MatchUiState, isPlayer: Boolean): MatchUiState {

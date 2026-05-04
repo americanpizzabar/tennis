@@ -109,4 +109,7 @@ dependencies {
 
     // Wear OS data layer
     implementation(libs.play.services.wearable)
+
+    // Nearby Connections (2 端末連携用)
+    implementation(libs.play.services.nearby)
 }

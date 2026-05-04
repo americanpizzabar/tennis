@@ -33,6 +33,11 @@ enum class TennisPoint(val display: String) {
     ADVANTAGE("AD");
 }
 
+enum class DeuceRule(val displayNameJa: String, val description: String) {
+    STANDARD_AD("デュース／アドバンテージ", "40-40 から 2 ポイント連取で勝ち（伝統ルール）"),
+    NO_AD("ノーアドバンテージ", "40-40 になったら次の 1 ポイント取った方が勝ち（決定戦方式）");
+}
+
 enum class ServingPlayer { PLAYER, OPPONENT }
 
 enum class MatchPhase(val displayNameJa: String) {
