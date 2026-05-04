@@ -13,16 +13,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.withContext
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlin.math.*
 
 /**
  * MediaPipe PoseLandmarker でスケルトン検知を行い、
  * スイング速度・打点高さ・膝角度をリアルタイム計測する。
  */
-@Singleton
-class PoseAnalyzer @Inject constructor(
+class PoseAnalyzer(
     @ApplicationContext private val context: Context
 ) {
     private var poseLandmarker: PoseLandmarker? = null

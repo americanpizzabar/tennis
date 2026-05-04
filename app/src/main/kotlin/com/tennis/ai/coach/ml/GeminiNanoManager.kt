@@ -10,15 +10,11 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import javax.inject.Inject
-import javax.inject.Singleton
-
 /**
  * Gemini Nano (on-device) で戦術アドバイスを生成する。
  * モデルが未ダウンロードの場合はルールベースのフォールバックを返す。
  */
-@Singleton
-class GeminiNanoManager @Inject constructor(
+class GeminiNanoManager(
     @ApplicationContext private val context: Context
 ) {
     private var llmInference: LlmInference? = null
