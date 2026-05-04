@@ -20,7 +20,7 @@ data class MatchState(
 
 @Serializable
 data class ScoreState(
-    val sets: List<Int> = listOf(0),
+    val sets: List<Int> = emptyList(),
     val games: Int = 0,
     val points: TennisPoint = TennisPoint.ZERO
 )
