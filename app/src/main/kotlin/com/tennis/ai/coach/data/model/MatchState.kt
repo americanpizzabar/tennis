@@ -35,7 +35,8 @@ enum class TennisPoint(val display: String) {
 
 enum class DeuceRule(val displayNameJa: String, val description: String) {
     STANDARD_AD("デュース／アドバンテージ", "40-40 から 2 ポイント連取で勝ち（伝統ルール）"),
-    NO_AD("ノーアドバンテージ", "40-40 になったら次の 1 ポイント取った方が勝ち（決定戦方式）");
+    NO_AD("ノーアドバンテージ", "40-40 になったら次の 1 ポイント取った方が勝ち（決定戦方式）"),
+    SEMI_AD("セミアドバンテージ", "1 回目のデュースは AD 方式、2 回目以降の 40-40 は次の 1 ポイントで決着");
 }
 
 enum class ServingPlayer { PLAYER, OPPONENT }

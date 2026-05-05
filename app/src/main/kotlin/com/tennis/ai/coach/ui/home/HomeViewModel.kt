@@ -8,6 +8,7 @@ import com.tennis.ai.coach.data.repository.MatchRepository
 import com.tennis.ai.coach.data.repository.ProfileRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class HomeUiState(
@@ -24,8 +25,14 @@ class HomeViewModel @Inject constructor(
 
     val uiState: StateFlow<HomeUiState> = combine(
         profileRepository.getActiveProfileFlow(),
-        matchRepository.getRecentReports(limit = 5)
+        matchRepository.getRecentReports(limit = 20)
     ) { profile, reports ->
         HomeUiState(activeProfile = profile, recentReports = reports, isLoading = false)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeUiState())
+
+    fun deleteReport(report: MatchReport) {
+        viewModelScope.launch {
+            matchRepository.deleteReport(report)
+        }
+    }
 }

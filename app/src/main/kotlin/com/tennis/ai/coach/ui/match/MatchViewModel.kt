@@ -34,10 +34,14 @@ data class ChangeoverTactic(
 data class MatchUiState(
     val matchId: String = UUID.randomUUID().toString(),
     val matchType: MatchType = MatchType.SINGLES,
-    val showSetupDialog: Boolean = true,
+    val showCameraSetup: Boolean = true,   // カメラ設置画面を試合前に表示
+    val showSetupDialog: Boolean = false,
     val opponentName: String = "相手選手",
     val opponentLevel: PlayerLevel = PlayerLevel.INTERMEDIATE,
-    val partnerName: String = "パートナー",
+    val opponentHand: DominantHand = DominantHand.RIGHT,
+    // ダブルス用：パートナー & 相手 2 名分の情報
+    val partner: PartnerProfile = PartnerProfile(),
+    val opponent2: PartnerProfile = PartnerProfile(name = "相手選手 2"),
     val deuceRule: DeuceRule = DeuceRule.STANDARD_AD,
     val playerScore: ScoreState = ScoreState(),
     val opponentScore: ScoreState = ScoreState(),
@@ -53,8 +57,46 @@ data class MatchUiState(
     val changeoverTactics: List<ChangeoverTactic> = emptyList(),
     val elapsedSeconds: Long = 0L,
     val isCameraActive: Boolean = false,
+    val cameraZoomRatio: Float = 1.0f,
+    val showSkeletonOverlay: Boolean = false,
+    val isRecording: Boolean = false,
     val playerProfile: PlayerProfile? = null,
-    val opponentProfile: OpponentProfile = OpponentProfile()
+    val opponentProfile: OpponentProfile = OpponentProfile(),
+    // 現在ゲームのデュース回数（SEMI_AD ルール用）
+    val deuceCountThisGame: Int = 0,
+    // ポイント単位の分析履歴（試合終了時にレポートに含める）
+    val pointAnalyses: List<PointAnalysisSnapshot> = emptyList(),
+)
+
+/** ポイント取得時に保存する分析スナップショット（試合後レビュー用、メモリ内のみ）。 */
+data class PointAnalysisSnapshot(
+    val pointIndex: Int,
+    val timestampMs: Long = System.currentTimeMillis(),
+    val gameScore: String,                // 例 "3G - 2G"
+    val pointScore: String,               // 例 "30-15"
+    val winnerIsPlayer: Boolean,
+    val phaseAtPoint: MatchPhase,
+    val advice: TacticalAdvice?,
+    val poseMetricsSnapshot: PoseMetrics?,
+    val landingsSinceLastPoint: List<BallLandingPoint>,
+)
+
+/** ストレージ永続化用のスナップショット形（DB に JSON 文字列として保存）。 */
+@kotlinx.serialization.Serializable
+data class SerializablePointSnapshot(
+    val pointIndex: Int,
+    val timestampMs: Long,
+    val gameScore: String,
+    val pointScore: String,
+    val winnerIsPlayer: Boolean,
+    val phaseAtPointName: String,
+    val adviceTitle: String? = null,
+    val adviceBody: String? = null,
+    val adviceCategory: String? = null,
+    val impactHeightCm: Float? = null,
+    val swingSpeedKmh: Float? = null,
+    val kneeAngleDeg: Float? = null,
+    val landingsCount: Int = 0,
 )
 
 @HiltViewModel
@@ -89,29 +131,67 @@ class MatchViewModel @Inject constructor(
 
     // ── 試合前セットアップ ─────────────────────────────────────
 
+    /** カメラ設置完了 → セットアップダイアログへ進む */
+    fun completeCameraSetup() {
+        _uiState.update { it.copy(showCameraSetup = false, showSetupDialog = true) }
+    }
+
+    /** カメラ設置をスキップしていきなりセットアップへ */
+    fun skipCameraSetup() = completeCameraSetup()
+
     fun setupMatch(
         opponentName: String,
         opponentLevel: PlayerLevel,
-        partnerName: String = "",
-        deuceRule: DeuceRule = DeuceRule.STANDARD_AD
+        opponentHand: DominantHand,
+        partner: PartnerProfile,
+        opponent2: PartnerProfile,
+        deuceRule: DeuceRule,
     ) {
         val oName = opponentName.ifBlank { "相手選手" }
-        val pName = partnerName.ifBlank { "パートナー" }
         _uiState.update { state ->
             state.copy(
                 showSetupDialog = false,
                 opponentName = oName,
                 opponentLevel = opponentLevel,
-                partnerName = pName,
+                opponentHand = opponentHand,
+                partner = partner,
+                opponent2 = opponent2,
                 deuceRule = deuceRule,
                 opponentProfile = state.opponentProfile.copy(
                     name = oName,
-                    estimatedLevel = opponentLevel
+                    estimatedLevel = opponentLevel,
+                    dominantHand = opponentHand,
                 )
             )
         }
         startTimer()
         requestAdvice()
+    }
+
+    fun setCameraZoom(ratio: Float) {
+        cameraManager.setZoom(ratio.coerceIn(1f, 5f))
+        _uiState.update { it.copy(cameraZoomRatio = ratio) }
+    }
+
+    fun toggleSkeletonOverlay() {
+        _uiState.update { it.copy(showSkeletonOverlay = !it.showSkeletonOverlay) }
+    }
+
+    fun toggleRecording() {
+        if (_uiState.value.isRecording) {
+            cameraManager.stopRecording()
+            _uiState.update { it.copy(isRecording = false) }
+        } else {
+            val outDir = profileRepository.getMatchVideoDir()
+            cameraManager.startRecording(outDir)
+            _uiState.update { it.copy(isRecording = true) }
+        }
+    }
+
+    /** チェンジオーバー残り時間を待たずに次ゲームへ進む */
+    fun skipChangeover() {
+        changeoverJob?.cancel()
+        _uiState.update { it.copy(isChangeover = false, phase = MatchPhase.POINT, changeoverSecondsLeft = 0) }
     }
 
     // ── カメラ ────────────────────────────────────────────────
@@ -162,11 +242,27 @@ class MatchViewModel @Inject constructor(
     fun opponentScorePoint() = updateScore(isPlayer = false)
 
     private fun updateScore(isPlayer: Boolean) {
+        val before = _uiState.value
+        // ポイントスナップショットを記録（後から振り返り可能）
+        val snapshot = PointAnalysisSnapshot(
+            pointIndex = before.pointAnalyses.size,
+            gameScore = "${before.playerScore.games}G - ${before.opponentScore.games}G",
+            pointScore = "${before.playerScore.points.display}-${before.opponentScore.points.display}",
+            winnerIsPlayer = isPlayer,
+            phaseAtPoint = before.phase,
+            advice = before.currentAdvice,
+            poseMetricsSnapshot = before.poseMetrics,
+            landingsSinceLastPoint = before.ballLandingHistory.takeLast(10),
+        )
+
         _uiState.update { state ->
             val newState = advanceScore(state, isPlayer)
             val needsChangeover = checkChangeover(newState)
             if (needsChangeover) startChangeover(newState)
-            newState.copy(isChangeover = needsChangeover)
+            newState.copy(
+                isChangeover = needsChangeover,
+                pointAnalyses = state.pointAnalyses + snapshot,
+            )
         }
         requestAdvice()
     }
@@ -180,20 +276,27 @@ class MatchViewModel @Inject constructor(
         // 1. アドバンテージ保持側が得点 → ゲーム取得
         if (winner.points == TennisPoint.ADVANTAGE) return wonGame(state, isPlayer)
 
-        // 2. 相手がアドバンテージ → デュースに戻る
+        // 2. 相手がアドバンテージ → デュースに戻る（デュース回数 +1）
         if (loser.points == TennisPoint.ADVANTAGE) {
             return state.copy(
                 playerScore = state.playerScore.copy(points = TennisPoint.FORTY),
                 opponentScore = state.opponentScore.copy(points = TennisPoint.FORTY),
-                phase = MatchPhase.POINT
+                phase = MatchPhase.POINT,
+                deuceCountThisGame = state.deuceCountThisGame + 1,
             )
         }
 
         // 3. 40-40（デュース）
         if (winner.points == TennisPoint.FORTY && loser.points == TennisPoint.FORTY) {
-            return when (state.deuceRule) {
-                DeuceRule.NO_AD -> wonGame(state, isPlayer)  // 1ポイント決着
-                DeuceRule.STANDARD_AD -> {
+            // SEMI_AD：1 回目のデュースだけ AD 方式、2 回目以降の 40-40 は次の 1 点で決着
+            val effectiveRule = when (state.deuceRule) {
+                DeuceRule.STANDARD_AD -> DeuceRule.STANDARD_AD
+                DeuceRule.NO_AD -> DeuceRule.NO_AD
+                DeuceRule.SEMI_AD -> if (state.deuceCountThisGame == 0) DeuceRule.STANDARD_AD else DeuceRule.NO_AD
+            }
+            return when (effectiveRule) {
+                DeuceRule.NO_AD -> wonGame(state, isPlayer)
+                else -> {
                     val newWinnerScore = winner.copy(points = TennisPoint.ADVANTAGE)
                     val phase = if (winnerIsServer) MatchPhase.GAME_POINT else MatchPhase.BREAK_POINT
                     if (isPlayer)
@@ -255,13 +358,15 @@ class MatchViewModel @Inject constructor(
             state.copy(
                 playerScore = state.playerScore.copy(sets = state.playerScore.sets + pGames, games = 0, points = TennisPoint.ZERO),
                 opponentScore = state.opponentScore.copy(sets = state.opponentScore.sets + oGames, games = 0, points = TennisPoint.ZERO),
-                phase = MatchPhase.POINT, servingPlayer = newServer
+                phase = MatchPhase.POINT, servingPlayer = newServer,
+                deuceCountThisGame = 0,
             )
         } else {
             state.copy(
                 playerScore = state.playerScore.copy(games = pGames, points = TennisPoint.ZERO),
                 opponentScore = state.opponentScore.copy(games = oGames, points = TennisPoint.ZERO),
-                phase = MatchPhase.POINT, servingPlayer = newServer
+                phase = MatchPhase.POINT, servingPlayer = newServer,
+                deuceCountThisGame = 0,
             )
         }
     }
@@ -321,7 +426,7 @@ class MatchViewModel @Inject constructor(
                     appendLine("④ ボレーは深く打つより角度をつけて決める")
                     appendLine()
                     appendLine("【注意点】")
-                    if (isDoubles) appendLine("前衛の${state.partnerName}と役割分担を確認。センターはパートナーに任せる。")
+                    if (isDoubles) appendLine("前衛の${state.partner.name}と役割分担を確認。センターはパートナーに任せる。")
                     appendLine(if (level == PlayerLevel.BEGINNER) "まずはサービスライン付近まで前進する練習から始めましょう。" else "相手がパッシングを打ちやすい状況では使いすぎに注意。")
                 }
             ),
@@ -385,7 +490,7 @@ class MatchViewModel @Inject constructor(
                     if (isDoubles) {
                         appendLine()
                         appendLine("【ダブルスでは】")
-                        appendLine("前衛の${state.partnerName}がポーチに出るフリをしつつ、ロブで役割交代する「ダミーポーチ＋ロブ」が有効。")
+                        appendLine("前衛の${state.partner.name}がポーチに出るフリをしつつ、ロブで役割交代する「ダミーポーチ＋ロブ」が有効。")
                     }
                 }
             ),
@@ -448,9 +553,9 @@ class MatchViewModel @Inject constructor(
                 title = "ダブルス陣形の見直し",
                 emoji = "👥",
                 category = "ダブルス専用",
-                shortDesc = "${state.partnerName}との連携を再確認",
+                shortDesc = "${state.partner.name}との連携を再確認",
                 detailedExplanation = buildString {
-                    appendLine("【${state.partnerName}との連携確認】")
+                    appendLine("【${state.partner.name}との連携確認】")
                     appendLine()
                     appendLine("① センターの担当を明確に決める（どちらがポーチに出るか）")
                     appendLine("② サーブのコースmix（ワイド→センター→ボディ）を再確認")
@@ -473,7 +578,8 @@ class MatchViewModel @Inject constructor(
     // ── AI アドバイス ─────────────────────────────────────────
 
     fun requestAdvice() {
-        if (_uiState.value.showSetupDialog) return
+        val s = _uiState.value
+        if (s.showSetupDialog || s.showCameraSetup) return
         adviceJob?.cancel()
         adviceJob = viewModelScope.launch {
             val state = _uiState.value
@@ -506,6 +612,11 @@ class MatchViewModel @Inject constructor(
     suspend fun endMatch(): String {
         timerJob?.cancel()
         changeoverJob?.cancel()
+        // 録画中なら停止
+        if (_uiState.value.isRecording) {
+            cameraManager.stopRecording()
+            _uiState.update { it.copy(isRecording = false) }
+        }
         val state = _uiState.value
         val playerSetsWon = state.playerScore.sets.zip(state.opponentScore.sets).count { (p, o) -> p > o }
         val opponentSetsWon = state.playerScore.sets.zip(state.opponentScore.sets).count { (p, o) -> o > p }
@@ -517,12 +628,33 @@ class MatchViewModel @Inject constructor(
         )
         val moments = listOf(KeyMoment("最重要ポイント：${state.playerScore.games}-${state.opponentScore.games}の局面", 0L, 0.9f, result == MatchResult.WIN))
         val setsStr = state.playerScore.sets.zip(state.opponentScore.sets).joinToString(" ") { (p, o) -> "$p-$o" }
+
+        // ポイント分析スナップショットをシリアライズ可能な形に変換して保存
+        val serializableSnapshots = state.pointAnalyses.map {
+            SerializablePointSnapshot(
+                pointIndex = it.pointIndex,
+                timestampMs = it.timestampMs,
+                gameScore = it.gameScore,
+                pointScore = it.pointScore,
+                winnerIsPlayer = it.winnerIsPlayer,
+                phaseAtPointName = it.phaseAtPoint.name,
+                adviceTitle = it.advice?.title,
+                adviceBody = it.advice?.body,
+                adviceCategory = it.advice?.category?.name,
+                impactHeightCm = it.poseMetricsSnapshot?.impactHeightCm,
+                swingSpeedKmh = it.poseMetricsSnapshot?.swingSpeedKmh,
+                kneeAngleDeg = it.poseMetricsSnapshot?.kneeAngleDeg,
+                landingsCount = it.landingsSinceLastPoint.size,
+            )
+        }
         val report = MatchReport(
             matchId = state.matchId, playerId = state.playerProfile?.id ?: 0L,
             matchType = state.matchType, durationMinutes = (state.elapsedSeconds / 60).toInt(),
             result = result, finalScore = setsStr.ifBlank { "${state.playerScore.games}-${state.opponentScore.games}" },
             summaryThreeLines = "試合データを分析中...",
-            keyMomentsJson = json.encodeToString(moments), statsJson = json.encodeToString(stats)
+            keyMomentsJson = json.encodeToString(moments),
+            statsJson = json.encodeToString(stats),
+            pointAnalysesJson = json.encodeToString(serializableSnapshots),
         )
         geminiNanoManager.generateMatchReport(
             MatchState(matchId = state.matchId, matchType = state.matchType, playerScore = state.playerScore, opponentScore = state.opponentScore),

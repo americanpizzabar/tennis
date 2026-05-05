@@ -81,12 +81,26 @@ fun MatchScreen(
         viewModel.initMatchType(matchType)
     }
 
-    // 試合前セットアップダイアログ
+    // ① カメラ設置画面：完了するまで他の試合 UI は出さない
+    if (uiState.showCameraSetup) {
+        CameraSetupScreen(
+            previewView = previewView,
+            isCameraGranted = cameraPermission.status.isGranted,
+            zoomRatio = uiState.cameraZoomRatio,
+            onZoomChange = { viewModel.setCameraZoom(it) },
+            onSkip = { viewModel.skipCameraSetup() },
+            onConfirm = { viewModel.completeCameraSetup() },
+            onBack = onBack,
+        )
+        return
+    }
+
+    // ② 試合前セットアップダイアログ
     if (uiState.showSetupDialog) {
         PreMatchSetupDialog(
             matchType = uiState.matchType,
-            onConfirm = { opponentName, opponentLevel, partnerName, deuceRule ->
-                viewModel.setupMatch(opponentName, opponentLevel, partnerName, deuceRule)
+            onConfirm = { opponentName, opponentLevel, opponentHand, partner, opponent2, deuceRule ->
+                viewModel.setupMatch(opponentName, opponentLevel, opponentHand, partner, opponent2, deuceRule)
             }
         )
     }
@@ -120,7 +134,7 @@ fun MatchScreen(
                         Text(uiState.matchType.displayNameJa + " 試合中", style = MaterialTheme.typography.titleMedium)
                         if (!uiState.showSetupDialog) {
                             Text(
-                                "vs ${uiState.opponentName}" + if (uiState.matchType == MatchType.DOUBLES) " ／ 味方: ${uiState.partnerName}" else "",
+                                "vs ${uiState.opponentName}" + if (uiState.matchType == MatchType.DOUBLES) " ／ 味方: ${uiState.partner.name}" else "",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.Gray
                             )
@@ -138,16 +152,30 @@ fun MatchScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF4CAF50)
                         )
-                        // カメラ状態インジケーター
-                        Icon(
-                            if (uiState.isCameraActive) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                            contentDescription = "カメラ",
-                            tint = if (uiState.isCameraActive) Color(0xFF4CAF50) else Color.Gray,
-                            modifier = Modifier
-                                .size(20.dp)
-                                .clickable { showCameraPreview = !showCameraPreview }
-                                .padding(end = 4.dp)
-                        )
+                        // 録画ボタン
+                        IconButton(onClick = { viewModel.toggleRecording() }) {
+                            Icon(
+                                if (uiState.isRecording) Icons.Default.StopCircle else Icons.Default.FiberManualRecord,
+                                contentDescription = "録画",
+                                tint = if (uiState.isRecording) Color(0xFFEF5350) else Color(0xFFB0B0B0),
+                            )
+                        }
+                        // 骨格オーバーレイ切替
+                        IconButton(onClick = { viewModel.toggleSkeletonOverlay() }) {
+                            Icon(
+                                Icons.Default.Accessibility,
+                                contentDescription = "骨格表示",
+                                tint = if (uiState.showSkeletonOverlay) Color(0xFF42A5F5) else Color(0xFFB0B0B0),
+                            )
+                        }
+                        // カメラプレビュー切替
+                        IconButton(onClick = { showCameraPreview = !showCameraPreview }) {
+                            Icon(
+                                if (uiState.isCameraActive) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                                contentDescription = "カメラ",
+                                tint = if (uiState.isCameraActive) Color(0xFF4CAF50) else Color.Gray,
+                            )
+                        }
                         IconButton(onClick = { showEndDialog = true }) {
                             Icon(Icons.Default.Stop, contentDescription = "試合終了", tint = Color(0xFFEF5350))
                         }
@@ -172,12 +200,65 @@ fun MatchScreen(
                     colors = CardDefaults.cardColors(containerColor = Color.Black),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    AndroidView(
-                        factory = { previewView },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(160.dp)
-                    )
+                    Column {
+                        Box(modifier = Modifier.fillMaxWidth().height(180.dp)) {
+                            AndroidView(
+                                factory = { previewView },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            // 骨格オーバーレイ（ポーズメトリクス取得済みのときに表示）
+                            if (uiState.showSkeletonOverlay) {
+                                SkeletonOverlay(metrics = uiState.poseMetrics, modifier = Modifier.fillMaxSize())
+                            }
+                            // 録画中インジケーター
+                            if (uiState.isRecording) {
+                                Row(
+                                    modifier = Modifier
+                                        .padding(8.dp)
+                                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(Color(0xFFEF5350), RoundedCornerShape(50))
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("REC", color = Color(0xFFEF5350),
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                        // ズームスライダー（広角〜望遠）
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("広角", color = Color.Gray,
+                                style = MaterialTheme.typography.labelSmall)
+                            Slider(
+                                value = uiState.cameraZoomRatio,
+                                onValueChange = { viewModel.setCameraZoom(it) },
+                                valueRange = 1f..5f,
+                                modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color(0xFF4CAF50),
+                                    activeTrackColor = Color(0xFF2E7D32),
+                                )
+                            )
+                            Text("望遠", color = Color.Gray,
+                                style = MaterialTheme.typography.labelSmall)
+                            Spacer(Modifier.width(4.dp))
+                            Text(String.format("%.1fx", uiState.cameraZoomRatio),
+                                color = Color(0xFF4CAF50),
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
             }
 
@@ -189,7 +270,8 @@ fun MatchScreen(
                     playerScore = uiState.playerScore,
                     opponentScore = uiState.opponentScore,
                     landingHistory = uiState.ballLandingHistory,
-                    onSelectTactic = viewModel::selectTactic
+                    onSelectTactic = viewModel::selectTactic,
+                    onSkip = viewModel::skipChangeover,
                 )
             } else if (!uiState.showSetupDialog) {
                 // スコアボード
@@ -240,12 +322,28 @@ fun MatchScreen(
 @Composable
 private fun PreMatchSetupDialog(
     matchType: MatchType,
-    onConfirm: (String, PlayerLevel, String, DeuceRule) -> Unit
+    onConfirm: (
+        opponentName: String,
+        opponentLevel: PlayerLevel,
+        opponentHand: DominantHand,
+        partner: PartnerProfile,
+        opponent2: PartnerProfile,
+        deuceRule: DeuceRule,
+    ) -> Unit
 ) {
     var opponentName by remember { mutableStateOf("") }
+    var opponentLevel by remember { mutableStateOf(PlayerLevel.INTERMEDIATE) }
+    var opponentHand by remember { mutableStateOf(DominantHand.RIGHT) }
+
     var partnerName by remember { mutableStateOf("") }
-    var selectedLevel by remember { mutableStateOf(PlayerLevel.INTERMEDIATE) }
-    var selectedDeuceRule by remember { mutableStateOf(DeuceRule.STANDARD_AD) }
+    var partnerLevel by remember { mutableStateOf(PlayerLevel.INTERMEDIATE) }
+    var partnerHand by remember { mutableStateOf(DominantHand.RIGHT) }
+
+    var opponent2Name by remember { mutableStateOf("") }
+    var opponent2Level by remember { mutableStateOf(PlayerLevel.INTERMEDIATE) }
+    var opponent2Hand by remember { mutableStateOf(DominantHand.RIGHT) }
+
+    var deuceRule by remember { mutableStateOf(DeuceRule.STANDARD_AD) }
 
     AlertDialog(
         onDismissRequest = {},
@@ -255,68 +353,47 @@ private fun PreMatchSetupDialog(
         },
         text = {
             Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
-                Text("試合情報を入力してください", color = Color.Gray,
-                    style = MaterialTheme.typography.bodySmall)
-
-                OutlinedTextField(
-                    value = opponentName,
-                    onValueChange = { opponentName = it },
-                    label = { Text("相手の名前（任意）") },
-                    placeholder = { Text("例：田中さん") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFF4CAF50),
-                        unfocusedBorderColor = Color.Gray
-                    )
+                // ── 相手選手 1 ──
+                PlayerSection(
+                    label = if (matchType == MatchType.DOUBLES) "相手選手 1" else "相手選手",
+                    name = opponentName,
+                    onNameChange = { opponentName = it },
+                    level = opponentLevel,
+                    onLevelChange = { opponentLevel = it },
+                    hand = opponentHand,
+                    onHandChange = { opponentHand = it },
+                    accentColor = Color(0xFFEF5350),
                 )
 
                 if (matchType == MatchType.DOUBLES) {
-                    OutlinedTextField(
-                        value = partnerName,
-                        onValueChange = { partnerName = it },
-                        label = { Text("パートナーの名前（任意）") },
-                        placeholder = { Text("例：山田さん") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFF4CAF50),
-                            unfocusedBorderColor = Color.Gray
-                        )
+                    // 相手選手 2
+                    PlayerSection(
+                        label = "相手選手 2",
+                        name = opponent2Name,
+                        onNameChange = { opponent2Name = it },
+                        level = opponent2Level,
+                        onLevelChange = { opponent2Level = it },
+                        hand = opponent2Hand,
+                        onHandChange = { opponent2Hand = it },
+                        accentColor = Color(0xFFEF5350),
+                    )
+                    // パートナー
+                    PlayerSection(
+                        label = "パートナー（味方）",
+                        name = partnerName,
+                        onNameChange = { partnerName = it },
+                        level = partnerLevel,
+                        onLevelChange = { partnerLevel = it },
+                        hand = partnerHand,
+                        onHandChange = { partnerHand = it },
+                        accentColor = Color(0xFF4CAF50),
                     )
                 }
 
-                Text("相手の推定レベル", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    PlayerLevel.values().forEach { level ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (selectedLevel == level) Color(0xFF2E7D32) else Color(0xFF1A2E1A))
-                                .clickable { selectedLevel = level }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = selectedLevel == level,
-                                onClick = { selectedLevel = level },
-                                colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF4CAF50))
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Column {
-                                Text(level.displayNameJa, color = Color.White,
-                                    fontWeight = if (selectedLevel == level) FontWeight.Bold else FontWeight.Normal)
-                                Text(levelDescription(level), color = Color.Gray,
-                                    style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                    }
-                }
-
+                // ── デュースルール ──
                 Text("デュースルール", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     DeuceRule.values().forEach { rule ->
@@ -324,20 +401,20 @@ private fun PreMatchSetupDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(if (selectedDeuceRule == rule) Color(0xFF1565C0) else Color(0xFF0D1F1F))
-                                .clickable { selectedDeuceRule = rule }
+                                .background(if (deuceRule == rule) Color(0xFF1565C0) else Color(0xFF0D1F1F))
+                                .clickable { deuceRule = rule }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
-                                selected = selectedDeuceRule == rule,
-                                onClick = { selectedDeuceRule = rule },
+                                selected = deuceRule == rule,
+                                onClick = { deuceRule = rule },
                                 colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF42A5F5))
                             )
                             Spacer(Modifier.width(8.dp))
                             Column {
                                 Text(rule.displayNameJa, color = Color.White,
-                                    fontWeight = if (selectedDeuceRule == rule) FontWeight.Bold else FontWeight.Normal)
+                                    fontWeight = if (deuceRule == rule) FontWeight.Bold else FontWeight.Normal)
                                 Text(rule.description, color = Color.Gray,
                                     style = MaterialTheme.typography.labelSmall)
                             }
@@ -348,12 +425,249 @@ private fun PreMatchSetupDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(opponentName, selectedLevel, partnerName, selectedDeuceRule) },
+                onClick = {
+                    onConfirm(
+                        opponentName, opponentLevel, opponentHand,
+                        PartnerProfile(
+                            name = partnerName.ifBlank { "パートナー" },
+                            estimatedLevel = partnerLevel,
+                            dominantHand = partnerHand,
+                        ),
+                        PartnerProfile(
+                            name = opponent2Name.ifBlank { "相手選手 2" },
+                            estimatedLevel = opponent2Level,
+                            dominantHand = opponent2Hand,
+                        ),
+                        deuceRule,
+                    )
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
             ) { Text("試合開始！", fontWeight = FontWeight.Bold) }
         },
         containerColor = Color(0xFF0D1F0D)
     )
+}
+
+@Composable
+private fun PlayerSection(
+    label: String,
+    name: String,
+    onNameChange: (String) -> Unit,
+    level: PlayerLevel,
+    onLevelChange: (PlayerLevel) -> Unit,
+    hand: DominantHand,
+    onHandChange: (DominantHand) -> Unit,
+    accentColor: Color,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF0D1F0D))
+            .border(1.dp, accentColor.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(label, color = accentColor, fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.titleSmall)
+
+        OutlinedTextField(
+            value = name,
+            onValueChange = onNameChange,
+            label = { Text("名前（任意）") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = accentColor,
+                unfocusedBorderColor = Color.Gray,
+            )
+        )
+
+        // レベル（コンパクト：横並びチップ）
+        Text("レベル", color = Color.Gray, style = MaterialTheme.typography.labelSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+            PlayerLevel.values().forEach { lv ->
+                val selected = lv == level
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (selected) accentColor.copy(alpha = 0.3f) else Color(0xFF1A2A1A))
+                        .border(1.dp,
+                            if (selected) accentColor else Color.Transparent,
+                            RoundedCornerShape(6.dp))
+                        .clickable { onLevelChange(lv) }
+                        .padding(vertical = 6.dp, horizontal = 2.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        lv.displayNameJa,
+                        color = if (selected) Color.White else Color.LightGray,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        style = MaterialTheme.typography.labelSmall,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+
+        // 利き手
+        Text("利き手", color = Color.Gray, style = MaterialTheme.typography.labelSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            DominantHand.values().forEach { h ->
+                val selected = h == hand
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (selected) accentColor.copy(alpha = 0.3f) else Color(0xFF1A2A1A))
+                        .border(1.dp,
+                            if (selected) accentColor else Color.Transparent,
+                            RoundedCornerShape(6.dp))
+                        .clickable { onHandChange(h) }
+                        .padding(vertical = 8.dp, horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    RadioButton(
+                        selected = selected,
+                        onClick = { onHandChange(h) },
+                        colors = RadioButtonDefaults.colors(selectedColor = accentColor),
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(h.displayNameJa, color = Color.White,
+                        style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+// ── カメラ設置画面 ──────────────────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CameraSetupScreen(
+    previewView: PreviewView,
+    isCameraGranted: Boolean,
+    zoomRatio: Float,
+    onZoomChange: (Float) -> Unit,
+    onSkip: () -> Unit,
+    onConfirm: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("① カメラ設置", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D1F0D))
+            )
+        },
+        containerColor = Color(0xFF0A1A0A)
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // プレビュー
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.Black),
+                modifier = Modifier.fillMaxWidth().weight(1f)
+            ) {
+                if (isCameraGranted) {
+                    AndroidView(
+                        factory = { previewView },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "カメラ権限を許可してください",
+                            color = Color(0xFFF9A825),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
+
+            // ズーム
+            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF0D1F0D))) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("ズーム", color = Color.Gray,
+                            style = MaterialTheme.typography.labelMedium)
+                        Text(
+                            String.format("%.1fx", zoomRatio),
+                            color = Color(0xFF4CAF50),
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Slider(
+                        value = zoomRatio,
+                        onValueChange = onZoomChange,
+                        valueRange = 1f..5f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color(0xFF4CAF50),
+                            activeTrackColor = Color(0xFF2E7D32),
+                        )
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("広角 1.0x", color = Color.Gray,
+                            style = MaterialTheme.typography.labelSmall)
+                        Text("望遠 5.0x", color = Color.Gray,
+                            style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+
+            // 設置のヒント
+            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF0D2C4D))) {
+                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("📷 撮影のコツ", color = Color(0xFFF9A825),
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        "・コートサイドのフェンスにスマホを横置きで固定すると全コートが映ります\n" +
+                            "・縦置きの場合はベースライン後方の高い位置がおすすめ\n" +
+                            "・三脚や100均クリップで揺れを抑えると分析精度が上がります\n" +
+                            "・端末が映像を出すまで数秒かかる場合があります",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onSkip,
+                    modifier = Modifier.weight(1f),
+                ) { Text("カメラなしで進む") }
+                Button(
+                    onClick = onConfirm,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("設置完了", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
 }
 
 private fun levelDescription(level: PlayerLevel) = when (level) {
@@ -546,7 +860,8 @@ private fun ChangeoverAnalysisPanel(
     playerScore: ScoreState,
     opponentScore: ScoreState,
     landingHistory: List<BallLandingPoint>,
-    onSelectTactic: (Int) -> Unit
+    onSelectTactic: (Int) -> Unit,
+    onSkip: () -> Unit,
 ) {
     var expandedIndex by remember { mutableStateOf(-1) }
 
@@ -556,25 +871,37 @@ private fun ChangeoverAnalysisPanel(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF0D47A1)),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                modifier = Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text("チェンジオーバー", color = Color.White, fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium)
-                    Text("次のゲームの戦術を選んでください", color = Color.White.copy(alpha = 0.7f),
-                        style = MaterialTheme.typography.bodySmall)
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text("チェンジオーバー", color = Color.White, fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium)
+                        Text("次のゲームの戦術を選んでください", color = Color.White.copy(alpha = 0.7f),
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "$secondsLeft",
+                            color = if (secondsLeft <= 20) Color(0xFFEF5350) else Color(0xFFF9A825),
+                            fontSize = 36.sp, fontWeight = FontWeight.Black
+                        )
+                        Text("秒", color = Color.White.copy(alpha = 0.7f),
+                            style = MaterialTheme.typography.labelSmall)
+                    }
                 }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "$secondsLeft",
-                        color = if (secondsLeft <= 20) Color(0xFFEF5350) else Color(0xFFF9A825),
-                        fontSize = 36.sp, fontWeight = FontWeight.Black
-                    )
-                    Text("秒", color = Color.White.copy(alpha = 0.7f),
-                        style = MaterialTheme.typography.labelSmall)
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = onSkip,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.SkipNext, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("次のゲームへ進む（待たずに開始）", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -847,6 +1174,57 @@ private fun LegendItem(color: Color, label: String) {
         Box(modifier = Modifier.size(8.dp).background(color, shape = RoundedCornerShape(50)))
         Spacer(Modifier.width(4.dp))
         Text(label, color = Color.Gray, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+/** 簡易骨格オーバーレイ（ポーズメトリクスがあるかどうかと角度系の数値だけを可視化）。 */
+@Composable
+private fun SkeletonOverlay(metrics: PoseMetrics?, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val centerX = size.width / 2f
+        val centerY = size.height / 2f
+        val color = Color(0xFF42A5F5).copy(alpha = 0.7f)
+
+        if (metrics == null) {
+            // メトリクス未取得：プレースホルダ円
+            drawCircle(color = color.copy(alpha = 0.3f), radius = 24f, center = Offset(centerX, centerY * 0.6f))
+            return@Canvas
+        }
+        // 概念的な棒人間：肩・腰・膝・足首を縦並びに、肩回転と膝角度を反映
+        val rotationRad = (metrics.shoulderRotationDeg * Math.PI / 180f).toFloat()
+        val torsoLen = size.height * 0.25f
+        val legLen = size.height * 0.20f
+        val armLen = size.height * 0.18f
+
+        val head = Offset(centerX, centerY * 0.35f)
+        val shoulders = Offset(centerX, head.y + torsoLen * 0.3f)
+        val hips = Offset(centerX, shoulders.y + torsoLen)
+        val kneeOffsetX = legLen * 0.1f
+        val knees = Offset(centerX + kneeOffsetX, hips.y + legLen * 0.5f)
+        val ankles = Offset(centerX + kneeOffsetX * 1.5f, knees.y + legLen * 0.5f)
+
+        // 頭
+        drawCircle(color = color, radius = 14f, center = head)
+        // 胴体
+        drawLine(color, shoulders, hips, strokeWidth = 6f)
+        // 腕（肩回転反映）
+        val rArmEnd = Offset(
+            shoulders.x + armLen * kotlin.math.cos(rotationRad),
+            shoulders.y + armLen * kotlin.math.sin(rotationRad),
+        )
+        val lArmEnd = Offset(
+            shoulders.x - armLen * kotlin.math.cos(rotationRad),
+            shoulders.y - armLen * kotlin.math.sin(rotationRad),
+        )
+        drawLine(color, shoulders, rArmEnd, strokeWidth = 5f)
+        drawLine(color, shoulders, lArmEnd, strokeWidth = 5f)
+        // 脚
+        drawLine(color, hips, knees, strokeWidth = 5f)
+        drawLine(color, knees, ankles, strokeWidth = 5f)
+        // 関節
+        listOf(shoulders, hips, knees, ankles, rArmEnd, lArmEnd).forEach {
+            drawCircle(color = Color.White.copy(alpha = 0.8f), radius = 4f, center = it)
+        }
     }
 }
 

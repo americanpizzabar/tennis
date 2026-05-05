@@ -18,6 +18,10 @@ data class MatchReport(
     val weaknessesJson: String = "[]",
     val practiceMenuJson: String = "[]",
     val statsJson: String = "{}",
+    /** 録画ファイルの絶対パス（録画していない場合は null）。 */
+    val videoPath: String? = null,
+    /** ポイント単位の分析スナップショット JSON 配列。 */
+    val pointAnalysesJson: String = "[]",
     val createdAt: Long = System.currentTimeMillis()
 )
 

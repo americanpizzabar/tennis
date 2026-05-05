@@ -3,6 +3,7 @@ package com.tennis.ai.coach.data.repository
 import com.tennis.ai.coach.data.local.dao.MatchReportDao
 import com.tennis.ai.coach.data.model.MatchReport
 import kotlinx.coroutines.flow.Flow
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,5 +22,15 @@ class MatchRepository @Inject constructor(
 
     suspend fun saveReport(report: MatchReport) = dao.upsertReport(report)
 
-    suspend fun deleteReport(report: MatchReport) = dao.deleteReport(report)
+    suspend fun deleteReport(report: MatchReport) {
+        // 関連動画ファイルもベストエフォートで削除
+        report.videoPath?.let { path ->
+            runCatching { File(path).takeIf { it.exists() }?.delete() }
+        }
+        dao.deleteReport(report)
+    }
+
+    suspend fun deleteReportById(matchId: String) {
+        getReportById(matchId)?.let { deleteReport(it) }
+    }
 }

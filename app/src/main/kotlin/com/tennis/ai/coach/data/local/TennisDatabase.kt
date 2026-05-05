@@ -9,7 +9,7 @@ import com.tennis.ai.coach.data.model.PlayerProfile
 
 @Database(
     entities = [PlayerProfile::class, MatchReport::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class TennisDatabase : RoomDatabase() {

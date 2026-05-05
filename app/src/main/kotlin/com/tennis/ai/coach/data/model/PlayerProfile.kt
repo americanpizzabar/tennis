@@ -49,6 +49,16 @@ data class OpponentProfile(
     val detectedHabits: List<OpponentHabit> = emptyList()
 )
 
+/**
+ * ダブルス時のパートナー情報。
+ */
+@Serializable
+data class PartnerProfile(
+    val name: String = "パートナー",
+    val estimatedLevel: PlayerLevel = PlayerLevel.INTERMEDIATE,
+    val dominantHand: DominantHand = DominantHand.RIGHT,
+)
+
 @Serializable
 data class OpponentHabit(
     val id: String,

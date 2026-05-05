@@ -2,6 +2,7 @@ package com.tennis.ai.coach.ui.home
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,7 +27,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
@@ -38,6 +39,29 @@ fun HomeScreen(
     onOpenMultiPhone: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    var deleteCandidate by remember { mutableStateOf<com.tennis.ai.coach.data.model.MatchReport?>(null) }
+
+    deleteCandidate?.let { report ->
+        AlertDialog(
+            onDismissRequest = { deleteCandidate = null },
+            title = { Text("試合記録を削除", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "${report.matchType.displayNameJa}（${report.finalScore}）の記録を削除しますか？\n" +
+                        "録画ファイルも削除され、元に戻せません。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteReport(report)
+                    deleteCandidate = null
+                }) { Text("削除", color = Color(0xFFEF5350)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteCandidate = null }) { Text("キャンセル") }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -144,7 +168,11 @@ fun HomeScreen(
                     )
                 }
                 items(uiState.recentReports) { report ->
-                    RecentMatchItem(report = report, onClick = { onViewReport(report.matchId) })
+                    RecentMatchItem(
+                        report = report,
+                        onClick = { onViewReport(report.matchId) },
+                        onLongPress = { deleteCandidate = report },
+                    )
                 }
             }
         }
@@ -245,13 +273,20 @@ private fun ActionCard(title: String, subtitle: String, icon: ImageVector, onCli
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun RecentMatchItem(report: MatchReport, onClick: () -> Unit) {
+private fun RecentMatchItem(
+    report: MatchReport,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit = {},
+) {
     val date = remember(report.createdAt) {
         SimpleDateFormat("M/d HH:mm", Locale.JAPAN).format(Date(report.createdAt))
     }
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
