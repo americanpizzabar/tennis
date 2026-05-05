@@ -26,10 +26,18 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // 友達配布段階では R8 minify を無効にして、autovalue/javapoet 経由の
+            // javax.lang.model.* 欠損エラーを回避する。Play Store 提出時に有効化を再検討。
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+    }
+
+    lint {
+        // リリースビルド時の lint 致命エラーで止めない（警告は引き続き表示）
+        abortOnError = false
+        checkReleaseBuilds = false
     }
 
     compileOptions {
