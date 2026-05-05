@@ -1,7 +1,7 @@
 package com.tennis.ai.coach.data.tactics
 
-import com.tennis.ai.coach.data.tactics.SituationTag as S
-import com.tennis.ai.coach.data.tactics.TacticCategory as C
+private typealias S = SituationTag
+private typealias C = TacticCategory
 
 /**
  * プロのコーチング教材・選手の試合分析を参考にした戦術ライブラリ。
