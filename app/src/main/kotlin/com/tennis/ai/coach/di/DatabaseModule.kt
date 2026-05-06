@@ -28,4 +28,8 @@ object DatabaseModule {
 
     @Provides
     fun provideMatchReportDao(db: TennisDatabase): MatchReportDao = db.matchReportDao()
+
+    @Provides
+    fun provideLessonReportDao(db: TennisDatabase): com.tennis.ai.coach.data.local.dao.LessonReportDao =
+        db.lessonReportDao()
 }

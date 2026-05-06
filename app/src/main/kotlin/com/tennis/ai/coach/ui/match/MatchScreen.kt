@@ -105,6 +105,19 @@ fun MatchScreen(
         )
     }
 
+    // ポイント分類シート（詳細スタッツモードオン時にポイント獲得後に出現）
+    uiState.pendingPoint?.let { pending ->
+        PointCategorySheet(
+            pending = pending,
+            firstServeFaultedThisPoint = uiState.firstServeFaultedThisPoint,
+            onRecordFirstFault = viewModel::recordFirstServeFault,
+            onCancel = viewModel::cancelPendingPoint,
+            onConfirm = { category, strokeType, rallyLength ->
+                viewModel.confirmPendingPoint(category, strokeType, rallyLength)
+            }
+        )
+    }
+
     // 試合終了確認ダイアログ
     if (showEndDialog) {
         AlertDialog(
@@ -152,6 +165,16 @@ fun MatchScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF4CAF50)
                         )
+                        // 詳細スタッツモードトグル
+                        IconButton(onClick = {
+                            viewModel.setDetailedStatsMode(!uiState.detailedStatsMode)
+                        }) {
+                            Icon(
+                                Icons.Default.BarChart,
+                                contentDescription = "詳細スタッツ記録",
+                                tint = if (uiState.detailedStatsMode) Color(0xFFF9A825) else Color(0xFFB0B0B0),
+                            )
+                        }
                         // 録画ボタン
                         IconButton(onClick = { viewModel.toggleRecording() }) {
                             Icon(
@@ -1324,4 +1347,200 @@ private fun formatElapsed(totalSeconds: Long): String {
     val m = (totalSeconds % 3600) / 60
     val s = totalSeconds % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+}
+
+// ── ポイント分類シート ─────────────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PointCategorySheet(
+    pending: PendingPoint,
+    firstServeFaultedThisPoint: Boolean,
+    onRecordFirstFault: () -> Unit,
+    onCancel: () -> Unit,
+    onConfirm: (PointCategory, StrokeType, Int) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var strokeType by remember { mutableStateOf(StrokeType.UNKNOWN) }
+    var rallyLength by remember { mutableStateOf(1) }
+
+    ModalBottomSheet(
+        onDismissRequest = onCancel,
+        sheetState = sheetState,
+        containerColor = Color(0xFF0D1F0D),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // ヘッダ
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text(
+                        if (pending.winnerIsPlayer) "✅ 自分のポイント" else "❌ 相手のポイント",
+                        color = if (pending.winnerIsPlayer) Color(0xFF4CAF50) else Color(0xFFEF5350),
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        "${pending.gameScoreBefore}　${pending.pointScoreBefore}" +
+                            (if (pending.wasBreakPoint) "　🛡️ ブレークポイント" else ""),
+                        color = Color.Gray,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                TextButton(onClick = onCancel) { Text("キャンセル") }
+            }
+
+            // 1st サーブをフォルトしたかどうかのトグル（サーバー側のみ）
+            if (pending.playerWasServing && !firstServeFaultedThisPoint) {
+                OutlinedButton(
+                    onClick = onRecordFirstFault,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.RemoveCircleOutline, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("先に 1st サーブをフォルトしていた場合はタップ")
+                }
+            } else if (firstServeFaultedThisPoint) {
+                Surface(
+                    color = Color(0xFFF9A825).copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(6.dp),
+                ) {
+                    Text(
+                        "📝 1st フォルト記録済み（このポイントは 2nd サーブから）",
+                        color = Color(0xFFF9A825),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+
+            // カテゴリ選択
+            Text("ポイントの種類", color = Color.Gray, style = MaterialTheme.typography.labelMedium)
+            val winnerSideCategories = if (pending.winnerIsPlayer) {
+                // 自分が取った場合の選択肢
+                listOf(
+                    PointCategory.ACE,
+                    PointCategory.SERVICE_WINNER,
+                    PointCategory.WINNER,
+                    PointCategory.NET_WINNER,
+                    PointCategory.FORCED_ERROR,    // 相手が崩されてミス
+                    PointCategory.NORMAL,
+                )
+            } else {
+                // 相手が取った（= 自分が失った）場合の選択肢
+                listOf(
+                    PointCategory.ACE,             // 相手のエース
+                    PointCategory.DOUBLE_FAULT,    // サーバーがダブルフォルト
+                    PointCategory.WINNER,          // 相手のウィナー
+                    PointCategory.UNFORCED_ERROR,  // 自分が勝手にミス
+                    PointCategory.FORCED_ERROR,    // 相手の良い球で崩された
+                    PointCategory.NORMAL,
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                winnerSideCategories.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEach { cat ->
+                            CategoryButton(
+                                category = cat,
+                                modifier = Modifier.weight(1f),
+                                onClick = { onConfirm(cat, strokeType, rallyLength) },
+                            )
+                        }
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+
+            // ストローク種別とラリー数（任意・コンパクト）
+            HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+            Text("ストローク種別（任意）", color = Color.Gray, style = MaterialTheme.typography.labelMedium)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                listOf(
+                    StrokeType.FOREHAND, StrokeType.BACKHAND,
+                    StrokeType.VOLLEY, StrokeType.SMASH, StrokeType.SERVE,
+                ).forEach { st ->
+                    val selected = st == strokeType
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (selected) Color(0xFF1565C0) else Color(0xFF1A2E1A))
+                            .clickable { strokeType = st }
+                            .padding(vertical = 6.dp, horizontal = 2.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            st.displayNameJa,
+                            color = Color.White,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            style = MaterialTheme.typography.labelSmall,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("ラリー数: $rallyLength 球", color = Color.Gray,
+                    style = MaterialTheme.typography.labelMedium)
+                Row {
+                    OutlinedButton(
+                        onClick = { rallyLength = (rallyLength - 1).coerceAtLeast(1) },
+                        modifier = Modifier.size(36.dp),
+                        contentPadding = PaddingValues(0.dp),
+                    ) { Text("−") }
+                    Spacer(Modifier.width(6.dp))
+                    OutlinedButton(
+                        onClick = { rallyLength = (rallyLength + 1).coerceAtMost(50) },
+                        modifier = Modifier.size(36.dp),
+                        contentPadding = PaddingValues(0.dp),
+                    ) { Text("+") }
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+        }
+    }
+}
+
+@Composable
+private fun CategoryButton(
+    category: PointCategory,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        color = Color(0xFF1A2E1A),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(category.emoji, fontSize = 18.sp)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                category.displayNameJa,
+                color = Color.White,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
 }

@@ -66,6 +66,29 @@ data class MatchUiState(
     val deuceCountThisGame: Int = 0,
     // ポイント単位の分析履歴（試合終了時にレポートに含める）
     val pointAnalyses: List<PointAnalysisSnapshot> = emptyList(),
+    // 詳細スタッツ記録モード：各ポイント獲得後に分類シートを表示
+    val detailedStatsMode: Boolean = true,
+    // 直近で「+1ポイント」が押されて分類待ちのポイント（null なら待機なし）
+    val pendingPoint: PendingPoint? = null,
+    // 現ポイントで既に 1st サーブをフォルトしたかどうか（= 次は 2nd サーブ）
+    val firstServeFaultedThisPoint: Boolean = false,
+    // この試合で計上された 1st/2nd サーブの累積カウンタ
+    val cumulativeFirstServeAttempts: Int = 0,
+    val cumulativeFirstServeIn: Int = 0,
+    val cumulativeSecondServeAttempts: Int = 0,
+)
+
+/** ポイント獲得直後の分類待ち情報。シートで category 等を埋めて確定させる。 */
+data class PendingPoint(
+    val winnerIsPlayer: Boolean,
+    val gameScoreBefore: String,
+    val pointScoreBefore: String,
+    val phaseBefore: MatchPhase,
+    val playerWasServing: Boolean,
+    val wasBreakPoint: Boolean,
+    val ballSpeedKmh: Float,
+    val poseMetrics: PoseMetrics?,
+    val landingsSinceLastPoint: List<BallLandingPoint>,
 )
 
 /** ポイント取得時に保存する分析スナップショット（試合後レビュー用、メモリ内のみ）。 */
@@ -79,6 +102,20 @@ data class PointAnalysisSnapshot(
     val advice: TacticalAdvice?,
     val poseMetricsSnapshot: PoseMetrics?,
     val landingsSinceLastPoint: List<BallLandingPoint>,
+    /** ポイントの種別（ユーザーが分類記録モードで指定）。 */
+    val category: PointCategory = PointCategory.UNCATEGORIZED,
+    /** どのサーブで決着したか（1st/2nd）。 */
+    val serveAttempt: ServeAttempt = ServeAttempt.NONE,
+    /** プレイヤーがサーブ側だったかどうか（= サーブ権）。 */
+    val playerWasServing: Boolean = false,
+    /** 決定的なストロークの種別。 */
+    val strokeType: StrokeType = StrokeType.UNKNOWN,
+    /** ラリー数（推定または手動）。 */
+    val rallyLength: Int = 0,
+    /** 検出された最大球速（推定）。 */
+    val ballSpeedKmh: Float = 0f,
+    /** ブレークポイントだったか。 */
+    val wasBreakPoint: Boolean = false,
 )
 
 /** ストレージ永続化用のスナップショット形（DB に JSON 文字列として保存）。 */
@@ -238,33 +275,378 @@ class MatchViewModel @Inject constructor(
 
     // ── スコア操作 ──────────────────────────────────────────
 
-    fun playerScorePoint() = updateScore(isPlayer = true)
-    fun opponentScorePoint() = updateScore(isPlayer = false)
+    fun playerScorePoint() = beginScorePoint(isPlayer = true)
+    fun opponentScorePoint() = beginScorePoint(isPlayer = false)
 
-    private fun updateScore(isPlayer: Boolean) {
+    /**
+     * ポイント獲得を記録。詳細スタッツモードがオンならシートを出して分類待ちに。
+     * オフならその場で確定。
+     */
+    private fun beginScorePoint(isPlayer: Boolean) {
         val before = _uiState.value
-        // ポイントスナップショットを記録（後から振り返り可能）
+        val playerWasServing = before.servingPlayer == ServingPlayer.PLAYER
+        val wasBreakPoint = before.phase == MatchPhase.BREAK_POINT
+        val ballSpeed = estimateBallSpeed(before.ballLandingHistory)
+
+        if (before.detailedStatsMode) {
+            _uiState.update {
+                it.copy(
+                    pendingPoint = PendingPoint(
+                        winnerIsPlayer = isPlayer,
+                        gameScoreBefore = "${before.playerScore.games}G - ${before.opponentScore.games}G",
+                        pointScoreBefore = "${before.playerScore.points.display}-${before.opponentScore.points.display}",
+                        phaseBefore = before.phase,
+                        playerWasServing = playerWasServing,
+                        wasBreakPoint = wasBreakPoint,
+                        ballSpeedKmh = ballSpeed,
+                        poseMetrics = before.poseMetrics,
+                        landingsSinceLastPoint = before.ballLandingHistory.takeLast(10),
+                    )
+                )
+            }
+            return
+        }
+        // シンプルモード：分類なしで即確定
+        commitScore(
+            isPlayer = isPlayer,
+            category = PointCategory.UNCATEGORIZED,
+            serveAttempt = ServeAttempt.NONE,
+            strokeType = StrokeType.UNKNOWN,
+            rallyLength = 0,
+        )
+    }
+
+    /** ボトムシートで分類を選んだあとに呼ばれる確定関数。 */
+    fun confirmPendingPoint(
+        category: PointCategory,
+        strokeType: StrokeType = StrokeType.UNKNOWN,
+        rallyLength: Int = 0,
+    ) {
+        val pending = _uiState.value.pendingPoint ?: return
+        // サーブ番号は内部状態から決定：1st フォルト後なら 2nd、ace/df 等は 1st とみなす
+        val serveAttempt = when {
+            !pending.playerWasServing && category != PointCategory.ACE -> ServeAttempt.NONE
+            // サーバー側が決定打 / DF した場合は現在のサーブ試行を使う
+            else -> if (_uiState.value.firstServeFaultedThisPoint) ServeAttempt.SECOND
+                else ServeAttempt.FIRST
+        }
+        commitScore(
+            isPlayer = pending.winnerIsPlayer,
+            category = category,
+            serveAttempt = serveAttempt,
+            strokeType = strokeType,
+            rallyLength = rallyLength,
+        )
+    }
+
+    fun cancelPendingPoint() {
+        _uiState.update { it.copy(pendingPoint = null) }
+    }
+
+    /** 「1st サーブをフォルト」を記録。次の getsScored は 2nd サーブ扱い。 */
+    fun recordFirstServeFault() {
+        _uiState.update {
+            it.copy(
+                firstServeFaultedThisPoint = true,
+                cumulativeFirstServeAttempts = it.cumulativeFirstServeAttempts + 1,
+            )
+        }
+    }
+
+    fun setDetailedStatsMode(enabled: Boolean) {
+        _uiState.update { it.copy(detailedStatsMode = enabled) }
+    }
+
+    private fun commitScore(
+        isPlayer: Boolean,
+        category: PointCategory,
+        serveAttempt: ServeAttempt,
+        strokeType: StrokeType,
+        rallyLength: Int,
+    ) {
+        val before = _uiState.value
+        val pending = before.pendingPoint
+        val playerWasServing = pending?.playerWasServing
+            ?: (before.servingPlayer == ServingPlayer.PLAYER)
+        val wasBreakPoint = pending?.wasBreakPoint
+            ?: (before.phase == MatchPhase.BREAK_POINT)
+        val ballSpeed = pending?.ballSpeedKmh ?: estimateBallSpeed(before.ballLandingHistory)
+        val poseMetrics = pending?.poseMetrics ?: before.poseMetrics
+        val landings = pending?.landingsSinceLastPoint ?: before.ballLandingHistory.takeLast(10)
+        val gameScoreBefore = pending?.gameScoreBefore
+            ?: "${before.playerScore.games}G - ${before.opponentScore.games}G"
+        val pointScoreBefore = pending?.pointScoreBefore
+            ?: "${before.playerScore.points.display}-${before.opponentScore.points.display}"
+        val phaseBefore = pending?.phaseBefore ?: before.phase
+
         val snapshot = PointAnalysisSnapshot(
             pointIndex = before.pointAnalyses.size,
-            gameScore = "${before.playerScore.games}G - ${before.opponentScore.games}G",
-            pointScore = "${before.playerScore.points.display}-${before.opponentScore.points.display}",
+            gameScore = gameScoreBefore,
+            pointScore = pointScoreBefore,
             winnerIsPlayer = isPlayer,
-            phaseAtPoint = before.phase,
+            phaseAtPoint = phaseBefore,
             advice = before.currentAdvice,
-            poseMetricsSnapshot = before.poseMetrics,
-            landingsSinceLastPoint = before.ballLandingHistory.takeLast(10),
+            poseMetricsSnapshot = poseMetrics,
+            landingsSinceLastPoint = landings,
+            category = category,
+            serveAttempt = serveAttempt,
+            playerWasServing = playerWasServing,
+            strokeType = strokeType,
+            rallyLength = rallyLength,
+            ballSpeedKmh = ballSpeed,
+            wasBreakPoint = wasBreakPoint,
         )
 
         _uiState.update { state ->
             val newState = advanceScore(state, isPlayer)
             val needsChangeover = checkChangeover(newState)
             if (needsChangeover) startChangeover(newState)
+            // サーブカウンタ更新：サーバーが今ポイントで打ったサーブを 1st/2nd 計上
+            val newFirstAttempts = if (playerWasServing && serveAttempt != ServeAttempt.NONE)
+                state.cumulativeFirstServeAttempts +
+                    (if (serveAttempt == ServeAttempt.FIRST && !state.firstServeFaultedThisPoint) 1 else 0)
+            else state.cumulativeFirstServeAttempts
+            val newFirstIn = if (playerWasServing && serveAttempt == ServeAttempt.FIRST &&
+                category != PointCategory.DOUBLE_FAULT && !state.firstServeFaultedThisPoint
+            ) state.cumulativeFirstServeIn + 1 else state.cumulativeFirstServeIn
+            val newSecondAttempts = if (playerWasServing && serveAttempt == ServeAttempt.SECOND)
+                state.cumulativeSecondServeAttempts + 1
+            else state.cumulativeSecondServeAttempts
+
             newState.copy(
                 isChangeover = needsChangeover,
                 pointAnalyses = state.pointAnalyses + snapshot,
+                pendingPoint = null,
+                firstServeFaultedThisPoint = false,    // 次ポイント用にリセット
+                cumulativeFirstServeAttempts = newFirstAttempts,
+                cumulativeFirstServeIn = newFirstIn,
+                cumulativeSecondServeAttempts = newSecondAttempts,
             )
         }
         requestAdvice()
+    }
+
+    /**
+     * 蓄積したポイント履歴から、両プレイヤーの詳細スタッツを集計する。
+     * 各カテゴリは「誰が取ったか」「サーバーは誰か」「どのカテゴリか」から派生して計上される。
+     */
+    private fun computeStatsFromPoints(state: MatchUiState): MatchStats {
+        var p = PlayerMatchStats()
+        var o = PlayerMatchStats()
+
+        for (snap in state.pointAnalyses) {
+            // ── 共通：通算 / トータル ─────────────────
+            p = p.copy(totalPointsPlayed = p.totalPointsPlayed + 1)
+            o = o.copy(totalPointsPlayed = o.totalPointsPlayed + 1)
+            if (snap.winnerIsPlayer) p = p.copy(totalPointsWon = p.totalPointsWon + 1)
+            else o = o.copy(totalPointsWon = o.totalPointsWon + 1)
+
+            // ── ラリー長＆ボール速度サンプル ─────────
+            if (snap.rallyLength > 0) {
+                p = p.copy(rallyLengthSum = p.rallyLengthSum + snap.rallyLength,
+                    rallyCount = p.rallyCount + 1)
+                o = o.copy(rallyLengthSum = o.rallyLengthSum + snap.rallyLength,
+                    rallyCount = o.rallyCount + 1)
+            }
+            if (snap.ballSpeedKmh > 0f) {
+                if (snap.winnerIsPlayer) {
+                    p = p.copy(
+                        ballSpeedSum = p.ballSpeedSum + snap.ballSpeedKmh,
+                        ballSpeedSamples = p.ballSpeedSamples + 1,
+                        maxBallSpeedKmh = maxOf(p.maxBallSpeedKmh, snap.ballSpeedKmh),
+                    )
+                } else {
+                    o = o.copy(
+                        ballSpeedSum = o.ballSpeedSum + snap.ballSpeedKmh,
+                        ballSpeedSamples = o.ballSpeedSamples + 1,
+                        maxBallSpeedKmh = maxOf(o.maxBallSpeedKmh, snap.ballSpeedKmh),
+                    )
+                }
+            }
+
+            // ── サーブ統計 ────────────────────────
+            if (snap.serveAttempt != ServeAttempt.NONE) {
+                val server = if (snap.playerWasServing) "P" else "O"
+                val isFirst = snap.serveAttempt == ServeAttempt.FIRST
+                val isAce = snap.category == PointCategory.ACE
+                val isDF = snap.category == PointCategory.DOUBLE_FAULT
+
+                if (server == "P") {
+                    if (isFirst) {
+                        p = p.copy(
+                            firstServeAttempts = p.firstServeAttempts + 1,
+                            firstServeIn = p.firstServeIn + 1,    // FIRST = 1st サーブが入った
+                            firstServePointsWon = p.firstServePointsWon +
+                                (if (snap.winnerIsPlayer) 1 else 0),
+                        )
+                    } else {
+                        // 2nd サーブ決着 = 1st をフォルトしている前提で 1st カウントも追加
+                        p = p.copy(
+                            firstServeAttempts = p.firstServeAttempts + 1,
+                            secondServeAttempts = p.secondServeAttempts + 1,
+                            secondServePointsWon = p.secondServePointsWon +
+                                (if (snap.winnerIsPlayer) 1 else 0),
+                        )
+                    }
+                    if (isAce) p = p.copy(aces = p.aces + 1)
+                    if (isDF) p = p.copy(doubleFaults = p.doubleFaults + 1)
+                    // 相手側のリターン統計
+                    if (isFirst && !isDF) {
+                        o = o.copy(
+                            firstServeReturnAttempts = o.firstServeReturnAttempts + 1,
+                            firstServeReturnPointsWon = o.firstServeReturnPointsWon +
+                                (if (!snap.winnerIsPlayer) 1 else 0),
+                        )
+                    } else if (!isFirst) {
+                        o = o.copy(
+                            secondServeReturnAttempts = o.secondServeReturnAttempts + 1,
+                            secondServeReturnPointsWon = o.secondServeReturnPointsWon +
+                                (if (!snap.winnerIsPlayer) 1 else 0),
+                        )
+                    }
+                } else {
+                    // 相手サーブ
+                    if (isFirst) {
+                        o = o.copy(
+                            firstServeAttempts = o.firstServeAttempts + 1,
+                            firstServeIn = o.firstServeIn + 1,
+                            firstServePointsWon = o.firstServePointsWon +
+                                (if (!snap.winnerIsPlayer) 1 else 0),
+                        )
+                    } else {
+                        o = o.copy(
+                            firstServeAttempts = o.firstServeAttempts + 1,
+                            secondServeAttempts = o.secondServeAttempts + 1,
+                            secondServePointsWon = o.secondServePointsWon +
+                                (if (!snap.winnerIsPlayer) 1 else 0),
+                        )
+                    }
+                    if (isAce) o = o.copy(aces = o.aces + 1)
+                    if (isDF) o = o.copy(doubleFaults = o.doubleFaults + 1)
+                    if (isFirst && !isDF) {
+                        p = p.copy(
+                            firstServeReturnAttempts = p.firstServeReturnAttempts + 1,
+                            firstServeReturnPointsWon = p.firstServeReturnPointsWon +
+                                (if (snap.winnerIsPlayer) 1 else 0),
+                        )
+                    } else if (!isFirst) {
+                        p = p.copy(
+                            secondServeReturnAttempts = p.secondServeReturnAttempts + 1,
+                            secondServeReturnPointsWon = p.secondServeReturnPointsWon +
+                                (if (snap.winnerIsPlayer) 1 else 0),
+                        )
+                    }
+                }
+            }
+
+            // ── ブレークポイント ──────────────────
+            if (snap.wasBreakPoint) {
+                if (snap.playerWasServing) {
+                    // プレイヤーサービスゲームのブレークポイント
+                    p = p.copy(breakPointsFaced = p.breakPointsFaced + 1)
+                    if (snap.winnerIsPlayer) p = p.copy(breakPointsSaved = p.breakPointsSaved + 1)
+                    o = o.copy(breakPointsAttempted = o.breakPointsAttempted + 1)
+                    if (!snap.winnerIsPlayer) o = o.copy(breakPointsConverted = o.breakPointsConverted + 1)
+                } else {
+                    // 相手サービスゲームのブレークポイント（プレイヤー攻撃側）
+                    o = o.copy(breakPointsFaced = o.breakPointsFaced + 1)
+                    if (!snap.winnerIsPlayer) o = o.copy(breakPointsSaved = o.breakPointsSaved + 1)
+                    p = p.copy(breakPointsAttempted = p.breakPointsAttempted + 1)
+                    if (snap.winnerIsPlayer) p = p.copy(breakPointsConverted = p.breakPointsConverted + 1)
+                }
+            }
+
+            // ── ストローク種別ベースのウィナー / エラー ─────
+            val winnerSidePlayer = snap.winnerIsPlayer
+            when (snap.category) {
+                PointCategory.WINNER, PointCategory.NET_WINNER, PointCategory.SERVICE_WINNER -> {
+                    if (winnerSidePlayer) {
+                        p = p.copy(winners = p.winners + 1)
+                        when (snap.strokeType) {
+                            StrokeType.FOREHAND -> p = p.copy(forehandWinners = p.forehandWinners + 1)
+                            StrokeType.BACKHAND -> p = p.copy(backhandWinners = p.backhandWinners + 1)
+                            else -> Unit
+                        }
+                    } else {
+                        o = o.copy(winners = o.winners + 1)
+                        when (snap.strokeType) {
+                            StrokeType.FOREHAND -> o = o.copy(forehandWinners = o.forehandWinners + 1)
+                            StrokeType.BACKHAND -> o = o.copy(backhandWinners = o.backhandWinners + 1)
+                            else -> Unit
+                        }
+                    }
+                }
+                PointCategory.UNFORCED_ERROR -> {
+                    // 失った側にカウント
+                    if (winnerSidePlayer) {
+                        // 相手のアンフォースド
+                        o = o.copy(unforcedErrors = o.unforcedErrors + 1)
+                        when (snap.strokeType) {
+                            StrokeType.FOREHAND -> o = o.copy(forehandErrors = o.forehandErrors + 1)
+                            StrokeType.BACKHAND -> o = o.copy(backhandErrors = o.backhandErrors + 1)
+                            else -> Unit
+                        }
+                    } else {
+                        // プレイヤーのアンフォースド
+                        p = p.copy(unforcedErrors = p.unforcedErrors + 1)
+                        when (snap.strokeType) {
+                            StrokeType.FOREHAND -> p = p.copy(forehandErrors = p.forehandErrors + 1)
+                            StrokeType.BACKHAND -> p = p.copy(backhandErrors = p.backhandErrors + 1)
+                            else -> Unit
+                        }
+                    }
+                }
+                PointCategory.FORCED_ERROR -> {
+                    if (winnerSidePlayer) o = o.copy(forcedErrors = o.forcedErrors + 1)
+                    else p = p.copy(forcedErrors = p.forcedErrors + 1)
+                }
+                else -> Unit
+            }
+
+            // ── ネットアプローチ（ネットウィナーのみカウント） ──
+            if (snap.category == PointCategory.NET_WINNER) {
+                if (winnerSidePlayer) p = p.copy(
+                    netApproaches = p.netApproaches + 1,
+                    netApproachesWon = p.netApproachesWon + 1,
+                )
+                else o = o.copy(
+                    netApproaches = o.netApproaches + 1,
+                    netApproachesWon = o.netApproachesWon + 1,
+                )
+            }
+        }
+
+        // ── 集計値の派生（後方互換のための古いフィールドにも反映） ───
+        val firstServePct = p.firstServePercent()
+        val secondServePct = p.secondServePointsWonPercent()
+        val avgRally = p.averageRallyLength()
+        return MatchStats(
+            firstServePercent = firstServePct,
+            secondServePercent = secondServePct,
+            winnerCount = p.winners,
+            unforeEdErrorCount = p.unforcedErrors,
+            netPointsWonPercent = p.netApproachesWonPercent(),
+            breakPointsConverted = p.breakPointsConverted,
+            breakPointsFaced = p.breakPointsFaced,
+            averageRallyLength = avgRally,
+            player = p,
+            opponent = o,
+        )
+    }
+
+    /** 直近の着弾点間隔から球速を簡易推定（km/h）。実精度は参考値レベル。 */
+    private fun estimateBallSpeed(landings: List<BallLandingPoint>): Float {
+        if (landings.size < 2) return 0f
+        val a = landings[landings.size - 2]
+        val b = landings.last()
+        val dt = (b.timestampMs - a.timestampMs).coerceAtLeast(1L)
+        val dx = b.x - a.x
+        val dy = b.y - a.y
+        val dist = kotlin.math.sqrt(dx * dx + dy * dy)
+        // コート対角を 1 ≒ 25m と仮定
+        val meters = dist * 25f
+        val mPerSec = meters / (dt / 1000f)
+        return (mPerSec * 3.6f).coerceIn(0f, 250f)
     }
 
     private fun advanceScore(state: MatchUiState, isPlayer: Boolean): MatchUiState {
@@ -621,11 +1003,8 @@ class MatchViewModel @Inject constructor(
         val playerSetsWon = state.playerScore.sets.zip(state.opponentScore.sets).count { (p, o) -> p > o }
         val opponentSetsWon = state.playerScore.sets.zip(state.opponentScore.sets).count { (p, o) -> o > p }
         val result = if (playerSetsWon >= opponentSetsWon) MatchResult.WIN else MatchResult.LOSS
-        val stats = MatchStats(
-            winnerCount = (5..20).random(), unforeEdErrorCount = (3..15).random(),
-            firstServePercent = (45..75).random(), netPointsWonPercent = (40..70).random(),
-            averageRallyLength = 3f + (Math.random() * 5f).toFloat()
-        )
+        // 実データのポイント履歴から統計を集計
+        val stats = computeStatsFromPoints(state)
         val moments = listOf(KeyMoment("最重要ポイント：${state.playerScore.games}-${state.opponentScore.games}の局面", 0L, 0.9f, result == MatchResult.WIN))
         val setsStr = state.playerScore.sets.zip(state.opponentScore.sets).joinToString(" ") { (p, o) -> "$p-$o" }
 

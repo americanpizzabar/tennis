@@ -181,41 +181,243 @@ private fun ThreeLineSummaryCard(summary: String) {
 
 @Composable
 private fun StatsCard(stats: MatchStats) {
+    val p = stats.player
+    val o = stats.opponent
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // ── サービス ──
+        StatsSection(
+            title = "🎾 サービス",
+            rows = listOf(
+                StatComparison("サービスエース", "${p.aces}", "${o.aces}", higherIsBetter = true),
+                StatComparison("ダブルフォルト", "${p.doubleFaults}", "${o.doubleFaults}", higherIsBetter = false),
+                StatComparison("1st サーブ確率",
+                    "${p.firstServePercent()}% (${p.firstServeIn}/${p.firstServeAttempts})",
+                    "${o.firstServePercent()}% (${o.firstServeIn}/${o.firstServeAttempts})",
+                    higherIsBetter = true),
+                StatComparison("1st サーブ獲得率",
+                    "${p.firstServePointsWonPercent()}%",
+                    "${o.firstServePointsWonPercent()}%",
+                    higherIsBetter = true),
+                StatComparison("2nd サーブ獲得率",
+                    "${p.secondServePointsWonPercent()}%",
+                    "${o.secondServePointsWonPercent()}%",
+                    higherIsBetter = true),
+                StatComparison("ブレークポイントセーブ",
+                    "${p.breakPointsSavedPercent()}% (${p.breakPointsSaved}/${p.breakPointsFaced})",
+                    "${o.breakPointsSavedPercent()}% (${o.breakPointsSaved}/${o.breakPointsFaced})",
+                    higherIsBetter = true),
+            )
+        )
+        // ── リターン ──
+        StatsSection(
+            title = "🔄 リターン",
+            rows = listOf(
+                StatComparison("1st リターン獲得率",
+                    "${p.firstServeReturnPointsWonPercent()}%",
+                    "${o.firstServeReturnPointsWonPercent()}%",
+                    higherIsBetter = true),
+                StatComparison("2nd リターン獲得率",
+                    "${p.secondServeReturnPointsWonPercent()}%",
+                    "${o.secondServeReturnPointsWonPercent()}%",
+                    higherIsBetter = true),
+                StatComparison("ブレーク獲得率",
+                    "${p.breakPointsWonPercent()}% (${p.breakPointsConverted}/${p.breakPointsAttempted})",
+                    "${o.breakPointsWonPercent()}% (${o.breakPointsConverted}/${o.breakPointsAttempted})",
+                    higherIsBetter = true),
+            )
+        )
+        // ── ストローク全体 ──
+        StatsSection(
+            title = "🏓 ストローク",
+            rows = listOf(
+                StatComparison("ウィナー", "${p.winners}", "${o.winners}", higherIsBetter = true),
+                StatComparison("アンフォースドエラー", "${p.unforcedErrors}", "${o.unforcedErrors}",
+                    higherIsBetter = false),
+                StatComparison("フォーストエラー", "${p.forcedErrors}", "${o.forcedErrors}",
+                    higherIsBetter = false),
+                StatComparison("ネットでのポイント",
+                    "${p.netApproachesWon}/${p.netApproaches} (${p.netApproachesWonPercent()}%)",
+                    "${o.netApproachesWon}/${o.netApproaches} (${o.netApproachesWonPercent()}%)",
+                    higherIsBetter = true),
+                StatComparison("総獲得ポイント",
+                    "${p.totalPointsWon}/${p.totalPointsPlayed}",
+                    "${o.totalPointsWon}/${o.totalPointsPlayed}",
+                    higherIsBetter = true),
+            )
+        )
+        // ── 高度なスタッツ ──
+        StatsSection(
+            title = "📊 アドバンストスタッツ",
+            rows = listOf(
+                StatComparison("平均ラリー長 (Shot Tolerance)",
+                    "%.1f球".format(p.averageRallyLength()),
+                    "%.1f球".format(o.averageRallyLength()),
+                    higherIsBetter = true),
+                StatComparison("平均球速",
+                    "%.0f km/h".format(p.averageBallSpeedKmh()),
+                    "%.0f km/h".format(o.averageBallSpeedKmh()),
+                    higherIsBetter = true),
+                StatComparison("最大球速",
+                    "%.0f km/h".format(p.maxBallSpeedKmh),
+                    "%.0f km/h".format(o.maxBallSpeedKmh),
+                    higherIsBetter = true),
+                StatComparison("FH ウィナー", "${p.forehandWinners}", "${o.forehandWinners}",
+                    higherIsBetter = true),
+                StatComparison("BH ウィナー", "${p.backhandWinners}", "${o.backhandWinners}",
+                    higherIsBetter = true),
+                StatComparison("FH エラー", "${p.forehandErrors}", "${o.forehandErrors}",
+                    higherIsBetter = false),
+                StatComparison("BH エラー", "${p.backhandErrors}", "${o.backhandErrors}",
+                    higherIsBetter = false),
+            )
+        )
+        // ── サマリーバー（ウィナー / エラー） ──
+        WinnerErrorBalanceCard(p, o)
+    }
+}
+
+private data class StatComparison(
+    val label: String,
+    val playerValue: String,
+    val opponentValue: String,
+    val higherIsBetter: Boolean,
+)
+
+@Composable
+private fun StatsSection(title: String, rows: List<StatComparison>) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("スタッツ", fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(8.dp))
-            StatRow("1stサーブ率", "${stats.firstServePercent}%",
-                isGood = stats.firstServePercent >= 60)
-            StatRow("ウィナー", "${stats.winnerCount}本", isGood = true)
-            StatRow("アンフォースドエラー", "${stats.unforeEdErrorCount}本",
-                isGood = stats.unforeEdErrorCount < stats.winnerCount)
-            StatRow("ネットポイント勝率", "${stats.netPointsWonPercent}%",
-                isGood = stats.netPointsWonPercent >= 50)
-            StatRow("平均ラリー球数", "%.1f球".format(stats.averageRallyLength), isGood = true)
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(6.dp))
+            // ヘッダ行
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("項目", color = Color.Gray, style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.weight(1.4f))
+                Text("自分", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
+                Text("相手", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
+            }
+            HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+            rows.forEach { r ->
+                StatComparisonRow(r)
+            }
         }
     }
 }
 
 @Composable
-private fun StatRow(label: String, value: String, isGood: Boolean) {
+private fun StatComparisonRow(stat: StatComparison) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
         Text(
-            value,
+            stat.label,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.Gray,
+            modifier = Modifier.weight(1.4f),
+        )
+        Text(
+            stat.playerValue,
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.bodySmall,
-            color = if (isGood) Color(0xFF4CAF50) else Color(0xFFEF5350)
+            color = Color(0xFF4CAF50),
+            modifier = Modifier.weight(1f),
         )
+        Text(
+            stat.opponentValue,
+            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFFEF5350),
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun WinnerErrorBalanceCard(p: PlayerMatchStats, o: PlayerMatchStats) {
+    val pBalance = p.winners - p.unforcedErrors
+    val oBalance = o.winners - o.unforcedErrors
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text("⚖️ ウィナー − アンフォースドエラー（攻撃の質）",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                BalanceCell(
+                    label = "自分",
+                    winners = p.winners,
+                    errors = p.unforcedErrors,
+                    balance = pBalance,
+                    color = Color(0xFF4CAF50),
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                BalanceCell(
+                    label = "相手",
+                    winners = o.winners,
+                    errors = o.unforcedErrors,
+                    balance = oBalance,
+                    color = Color(0xFFEF5350),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (pBalance > oBalance)
+                    "✅ 自分の方が攻撃の質が高い（差: +${pBalance - oBalance}）"
+                else if (pBalance < oBalance)
+                    "⚠️ 相手の方が攻撃の質が高い（差: ${pBalance - oBalance}）"
+                else "互角の攻撃力",
+                color = Color.Gray,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BalanceCell(
+    label: String,
+    winners: Int,
+    errors: Int,
+    balance: Int,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        color = color.copy(alpha = 0.15f),
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(label, color = color, fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.labelMedium)
+            Text(
+                if (balance >= 0) "+$balance" else "$balance",
+                color = color,
+                fontWeight = FontWeight.Black,
+                fontSize = 24.sp,
+            )
+            Text("W:$winners / UE:$errors",
+                color = Color.Gray,
+                style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 
