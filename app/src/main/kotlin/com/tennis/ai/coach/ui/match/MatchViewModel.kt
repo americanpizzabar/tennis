@@ -67,7 +67,7 @@ data class MatchUiState(
     // ポイント単位の分析履歴（試合終了時にレポートに含める）
     val pointAnalyses: List<PointAnalysisSnapshot> = emptyList(),
     // 詳細スタッツ記録モード：各ポイント獲得後に分類シートを表示
-    val detailedStatsMode: Boolean = true,
+    val detailedStatsMode: Boolean = false,
     // 直近で「+1ポイント」が押されて分類待ちのポイント（null なら待機なし）
     val pendingPoint: PendingPoint? = null,
     // 現ポイントで既に 1st サーブをフォルトしたかどうか（= 次は 2nd サーブ）
@@ -206,7 +206,7 @@ class MatchViewModel @Inject constructor(
     }
 
     fun setCameraZoom(ratio: Float) {
-        cameraManager.setZoom(ratio.coerceIn(1f, 5f))
+        cameraManager.setZoom(ratio.coerceIn(0.5f, 5f))
         _uiState.update { it.copy(cameraZoomRatio = ratio) }
     }
 
@@ -399,7 +399,7 @@ class MatchViewModel @Inject constructor(
 
         _uiState.update { state ->
             val newState = advanceScore(state, isPlayer)
-            val needsChangeover = checkChangeover(newState)
+            val needsChangeover = checkChangeover(state, newState)
             if (needsChangeover) startChangeover(newState)
             // サーブカウンタ更新：サーバーが今ポイントで打ったサーブを 1st/2nd 計上
             val newFirstAttempts = if (playerWasServing && serveAttempt != ServeAttempt.NONE)
@@ -753,9 +753,11 @@ class MatchViewModel @Inject constructor(
         }
     }
 
-    private fun checkChangeover(state: MatchUiState): Boolean {
-        val total = state.playerScore.games + state.opponentScore.games
-        return total % 2 == 1 && total > 0
+    private fun checkChangeover(before: MatchUiState, after: MatchUiState): Boolean {
+        val totalBefore = before.playerScore.games + before.opponentScore.games
+        val totalAfter = after.playerScore.games + after.opponentScore.games
+        // Only trigger when a game was actually won AND the new total is an odd number
+        return totalAfter != totalBefore && totalAfter % 2 == 1 && totalAfter > 0
     }
 
     // ── チェンジオーバー ──────────────────────────────────────

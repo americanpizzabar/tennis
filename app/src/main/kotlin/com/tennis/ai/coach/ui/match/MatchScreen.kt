@@ -266,7 +266,7 @@ fun MatchScreen(
                             Slider(
                                 value = uiState.cameraZoomRatio,
                                 onValueChange = { viewModel.setCameraZoom(it) },
-                                valueRange = 1f..5f,
+                                valueRange = 0.5f..5f,
                                 modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
                                 colors = SliderDefaults.colors(
                                     thumbColor = Color(0xFF4CAF50),
@@ -638,7 +638,7 @@ private fun CameraSetupScreen(
                     Slider(
                         value = zoomRatio,
                         onValueChange = onZoomChange,
-                        valueRange = 1f..5f,
+                        valueRange = 0.5f..5f,
                         colors = SliderDefaults.colors(
                             thumbColor = Color(0xFF4CAF50),
                             activeTrackColor = Color(0xFF2E7D32),
@@ -648,7 +648,7 @@ private fun CameraSetupScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Text("広角 1.0x", color = Color.Gray,
+                        Text("広角 0.5x", color = Color.Gray,
                             style = MaterialTheme.typography.labelSmall)
                         Text("望遠 5.0x", color = Color.Gray,
                             style = MaterialTheme.typography.labelSmall)

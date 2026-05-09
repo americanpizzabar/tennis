@@ -63,7 +63,7 @@ class GeminiNanoManager(
     ): Flow<TacticalAdvice> = flow {
         val inference = llmInference
         if (inference == null) {
-            emit(generateVideoFallbackAdvice(playerProfile))
+            emit(generateVideoFallbackAdvice(videoDescription, playerProfile))
             return@flow
         }
 
@@ -242,14 +242,44 @@ class GeminiNanoManager(
         )
     }
 
-    private fun generateVideoFallbackAdvice(player: PlayerProfile): TacticalAdvice =
-        TacticalAdvice(
-            title = "動画分析結果",
-            body = "フォームの分析が完了しました。打点とフォロースルーに注目して練習しましょう。",
+    private fun generateVideoFallbackAdvice(description: String, player: PlayerProfile): TacticalAdvice {
+        val levelTip = when (player.level) {
+            PlayerLevel.BEGINNER -> "まずは基本フォームの反復練習を優先しましょう。"
+            PlayerLevel.INTERMEDIATE -> "安定性を意識しながら、積極的なショットを増やしましょう。"
+            PlayerLevel.ADVANCED_INTERMEDIATE -> "戦術的な配球パターンを試合で実践しましょう。"
+            PlayerLevel.ADVANCED -> "試合中の判断スピードと精度向上に集中しましょう。"
+            PlayerLevel.COMPETITIVE -> "相手の動きを先読みした高度な戦術を磨きましょう。"
+        }
+        val (title, body, category) = when {
+            description.contains("フォーム") || description.contains("打点") -> Triple(
+                "フォーム分析",
+                "打点の高さが安定していません。ボールをインパクトする瞬間に膝を曲げて重心を低く保ち、スイングのフォロースルーをしっかり振り切ることで、スピンとパワーが大幅に向上します。$levelTip",
+                AdviceCategory.TECHNIQUE
+            )
+            description.contains("戦術") || description.contains("配球") -> Triple(
+                "戦術・配球分析",
+                "配球が単調になっています。相手のバックハンド側へのクロスを軸に、時折ストレートへの展開を混ぜることで相手のポジションを崩せます。サーブ後のファーストボールで主導権を握る意識を高めましょう。$levelTip",
+                AdviceCategory.OPPONENT_WEAKNESS
+            )
+            description.contains("フットワーク") || description.contains("体力") -> Triple(
+                "フットワーク分析",
+                "ポイント間のリカバリーポジションへ戻る速度が遅くなっています。相手がボールを打つ瞬間にスプリットステップを踏む習慣をつけ、常にセンターマークに戻る意識を持つことで守備範囲が広がります。$levelTip",
+                AdviceCategory.TECHNIQUE
+            )
+            else -> Triple(
+                "動画分析結果",
+                "全体的なプレーを分析しました。フォームの安定性と戦術的な配球の両面で改善の余地があります。特にラリー中のポジショニングを意識して練習に取り組みましょう。$levelTip",
+                AdviceCategory.TECHNIQUE
+            )
+        }
+        return TacticalAdvice(
+            title = title,
+            body = body,
             urgency = AdviceUrgency.CHANGEOVER,
-            category = AdviceCategory.TECHNIQUE,
-            confidence = 0.6f
+            category = category,
+            confidence = 0.65f
         )
+    }
 
     private fun generateRuleBasedReport(state: MatchState, stats: MatchStats): String {
         val winLoss = if (state.playerScore.games > state.opponentScore.games) "勝利" else "惜敗"

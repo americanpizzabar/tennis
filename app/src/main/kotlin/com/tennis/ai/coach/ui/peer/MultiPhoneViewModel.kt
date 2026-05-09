@@ -33,6 +33,9 @@ class MultiPhoneViewModel @Inject constructor(
     private val _ui = MutableStateFlow(MultiPhoneUiState())
     val ui: StateFlow<MultiPhoneUiState> = _ui.asStateFlow()
 
+    // Track whether this device started as host so we know to auto-assign roles
+    private var isHost = false
+
     init {
         viewModelScope.launch {
             peerSession.state.collect { st -> _ui.update { it.copy(peerState = st) } }
@@ -46,11 +49,13 @@ class MultiPhoneViewModel @Inject constructor(
     }
 
     fun startAsHost(role: PeerRole) {
+        isHost = true
         appendLog("ホストとして広告開始（${role.displayNameJa}）")
         peerSession.startAdvertising(role)
     }
 
     fun startAsGuest(role: PeerRole) {
+        isHost = false
         appendLog("ゲストとして探索開始（${role.displayNameJa}）")
         peerSession.startDiscovery(role)
     }
@@ -71,6 +76,12 @@ class MultiPhoneViewModel @Inject constructor(
             is PeerMessage.Hello -> {
                 appendLog("相手 ${msg.deviceName} と接続（${msg.role.displayNameJa}）")
                 _ui.update { it.copy(peerName = msg.deviceName) }
+                // Guest automatically takes the role opposite to the host's role
+                if (!isHost) {
+                    val assignedRole = msg.role.other()
+                    peerSession.updateMyRole(assignedRole)
+                    appendLog("自動割当: ${assignedRole.displayNameJa}")
+                }
             }
             is PeerMessage.BallLanding -> {
                 _ui.update { state ->
@@ -93,6 +104,7 @@ class MultiPhoneViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        peerSession.stop()
+        // Do NOT stop the peer session here — the connection should survive navigation.
+        // The user must explicitly press "セッション終了" to disconnect.
     }
 }

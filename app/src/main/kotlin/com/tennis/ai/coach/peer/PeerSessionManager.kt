@@ -96,6 +96,14 @@ class PeerSessionManager @Inject constructor(
         _discovered.value = emptyList()
     }
 
+    fun updateMyRole(role: PeerRole) {
+        myRole = role
+        val current = _state.value
+        if (current is PeerState.Connected) {
+            _state.value = current.copy(myRole = role)
+        }
+    }
+
     fun send(message: PeerMessage): Boolean {
         val endpoint = connectedEndpointId ?: return false
         val payload = runCatching {

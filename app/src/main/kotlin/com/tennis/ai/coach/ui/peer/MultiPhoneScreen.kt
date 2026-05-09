@@ -59,9 +59,7 @@ fun MultiPhoneScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        viewModel.stop(); onBack()
-                    }) { Icon(Icons.Default.ArrowBack, null) }
+                    IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D1F0D))
             )
