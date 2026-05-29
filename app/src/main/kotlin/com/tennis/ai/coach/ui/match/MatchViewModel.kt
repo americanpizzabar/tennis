@@ -66,8 +66,8 @@ data class MatchUiState(
     val deuceCountThisGame: Int = 0,
     // ポイント単位の分析履歴（試合終了時にレポートに含める）
     val pointAnalyses: List<PointAnalysisSnapshot> = emptyList(),
-    // 詳細スタッツ記録モード：各ポイント獲得後に分類シートを表示
-    val detailedStatsMode: Boolean = true,
+    // 詳細スタッツ記録モード：各ポイント獲得後に分類シートを表示（デフォルト OFF）
+    val detailedStatsMode: Boolean = false,
     // 直近で「+1ポイント」が押されて分類待ちのポイント（null なら待機なし）
     val pendingPoint: PendingPoint? = null,
     // 現ポイントで既に 1st サーブをフォルトしたかどうか（= 次は 2nd サーブ）
@@ -399,7 +399,7 @@ class MatchViewModel @Inject constructor(
 
         _uiState.update { state ->
             val newState = advanceScore(state, isPlayer)
-            val needsChangeover = checkChangeover(newState)
+            val needsChangeover = checkChangeover(state, newState)
             if (needsChangeover) startChangeover(newState)
             // サーブカウンタ更新：サーバーが今ポイントで打ったサーブを 1st/2nd 計上
             val newFirstAttempts = if (playerWasServing && serveAttempt != ServeAttempt.NONE)
@@ -753,9 +753,14 @@ class MatchViewModel @Inject constructor(
         }
     }
 
-    private fun checkChangeover(state: MatchUiState): Boolean {
-        val total = state.playerScore.games + state.opponentScore.games
-        return total % 2 == 1 && total > 0
+    private fun checkChangeover(before: MatchUiState, after: MatchUiState): Boolean {
+        val gamesBefore = before.playerScore.games + before.opponentScore.games
+        val gamesAfter = after.playerScore.games + after.opponentScore.games
+        // ゲームが実際に 1 つ完了した瞬間だけ判定（毎ポイント発火を防ぐ）
+        val gameJustEnded = gamesAfter > gamesBefore
+        // セット完了時はゲーム数が 0 にリセットされるため、合計ゲーム数で判定できない。
+        // ここでは「ゲームが終わって新しい合計が奇数」のときのみチェンジオーバー。
+        return gameJustEnded && gamesAfter % 2 == 1 && gamesAfter > 0
     }
 
     // ── チェンジオーバー ──────────────────────────────────────

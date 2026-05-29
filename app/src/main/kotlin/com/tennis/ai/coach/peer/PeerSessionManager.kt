@@ -53,12 +53,15 @@ class PeerSessionManager @Inject constructor(
 
     private var connectedEndpointId: String? = null
     private var myRole: PeerRole = PeerRole.OWN_SIDE
+    // 自分がホスト（advertiser）かどうか。ゲストはホストの反対陣を自動採用する。
+    private var isHost: Boolean = false
 
     private val deviceName = (Build.MODEL ?: "Phone").take(20)
 
     // ── 送信側 (advertiser) ───────────────────────────────────
     fun startAdvertising(role: PeerRole) {
         myRole = role
+        isHost = true
         _state.value = PeerState.Advertising
         val options = AdvertisingOptions.Builder()
             .setStrategy(Strategy.P2P_POINT_TO_POINT)
@@ -71,6 +74,7 @@ class PeerSessionManager @Inject constructor(
     // ── 受信側 (discoverer) ───────────────────────────────────
     fun startDiscovery(role: PeerRole) {
         myRole = role
+        isHost = false
         _state.value = PeerState.Discovering
         _discovered.value = emptyList()
         val options = DiscoveryOptions.Builder()
@@ -149,7 +153,14 @@ class PeerSessionManager @Inject constructor(
             runCatching {
                 val text = String(bytes, Charsets.UTF_8)
                 json.decodeFromString<PeerMessage>(text)
-            }.onSuccess { msg -> _incoming.tryEmit(msg) }
+            }.onSuccess { msg ->
+                // ゲストはホストの Hello を受け取ったら、自動的に反対の陣に切り替える
+                if (msg is PeerMessage.Hello && !isHost) {
+                    myRole = msg.role.other()
+                    connectedEndpointId?.let { _state.value = PeerState.Connected(it, myRole) }
+                }
+                _incoming.tryEmit(msg)
+            }
         }
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) = Unit
     }

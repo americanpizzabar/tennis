@@ -59,9 +59,8 @@ fun MultiPhoneScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        viewModel.stop(); onBack()
-                    }) { Icon(Icons.Default.ArrowBack, null) }
+                    // 戻るだけ。接続は維持される（明示的な「セッション終了」でのみ切断）。
+                    IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D1F0D))
             )
@@ -161,13 +160,16 @@ private fun SetupCard(
             Text(
                 "① 2 台のスマホを 5m 以内に置く\n" +
                     "② コートの両サイドにそれぞれ設置（自陣・相手陣）\n" +
-                    "③ 片方が「ホスト」、もう片方が「参加」を選ぶ\n" +
-                    "④ 接続後、それぞれが半面を撮影しデータを共有",
+                    "③ ホスト側だけが担当（自陣/相手陣）を選ぶ\n" +
+                    "④ 参加側は接続時に自動的に反対の陣になる",
                 color = Color.White, style = MaterialTheme.typography.bodySmall
             )
 
             Spacer(Modifier.height(4.dp))
-            Text("この端末の担当", color = Color.Gray, style = MaterialTheme.typography.labelMedium)
+            Text(
+                "ホストの担当（参加側は自動で反対になります）",
+                color = Color.Gray, style = MaterialTheme.typography.labelMedium,
+            )
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 PeerRole.values().forEach { role ->
                     Row(

@@ -91,8 +91,7 @@ class MultiPhoneViewModel @Inject constructor(
         _ui.update { it.copy(log = (it.log + line).takeLast(20)) }
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        peerSession.stop()
-    }
+    // 注意：onCleared では stop() しない。
+    // PeerSessionManager は @Singleton なので、画面を離れても接続は維持される。
+    // セッション終了はユーザーが明示的に「セッション終了」を押したときのみ。
 }
