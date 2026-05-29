@@ -58,7 +58,7 @@ class CameraManager @Inject constructor(
         lifecycleOwner: LifecycleOwner,
         previewView: PreviewView,
         lensFacing: Int = CameraSelector.LENS_FACING_BACK
-    ) {
+    ): Boolean = runCatching {
         val cameraProvider = getCameraProvider()
 
         val preview = Preview.Builder()
@@ -86,17 +86,15 @@ class CameraManager @Inject constructor(
             .requireLensFacing(lensFacing)
             .build()
 
-        runCatching {
-            cameraProvider.unbindAll()
-            camera = cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                cameraSelector,
-                preview,
-                imageAnalysis,
-                videoCapture
-            )
-        }
-    }
+        cameraProvider.unbindAll()
+        camera = cameraProvider.bindToLifecycle(
+            lifecycleOwner,
+            cameraSelector,
+            preview,
+            imageAnalysis,
+            videoCapture
+        )
+    }.isSuccess
 
     private fun processFrame(imageProxy: ImageProxy) {
         val bitmap = imageProxy.toBitmap() ?: run {
@@ -166,7 +164,13 @@ class CameraManager @Inject constructor(
     private suspend fun getCameraProvider(): ProcessCameraProvider =
         suspendCoroutine { cont ->
             ProcessCameraProvider.getInstance(context).also { future ->
-                future.addListener({ cont.resume(future.get()) }, ContextCompat.getMainExecutor(context))
+                future.addListener({
+                    try {
+                        cont.resume(future.get())
+                    } catch (e: Exception) {
+                        cont.resumeWithException(e)
+                    }
+                }, ContextCompat.getMainExecutor(context))
             }
         }
 

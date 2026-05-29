@@ -44,7 +44,7 @@
         <service
             android:name=".service.MatchAnalysisService"
             android:exported="false"
-            android:foregroundServiceType="camera|mediaProjection" />
+            android:foregroundServiceType="camera" />
 
         <!-- Wear OS data layer listener -->
         <service
