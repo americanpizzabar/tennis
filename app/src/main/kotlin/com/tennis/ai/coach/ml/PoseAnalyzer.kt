@@ -163,7 +163,9 @@ class PoseAnalyzer(
                     impactHeightCm = impactHeightCm,
                     kneeAngleDeg = kneeAngle,
                     shoulderRotationDeg = shoulderRotation,
-                    elapsedSinceLastShot = dt
+                    elapsedSinceLastShot = dt,
+                    wristX = wrist.x().coerceIn(0f, 1f),
+                    wristY = wrist.y().coerceIn(0f, 1f),
                 )
             )
         }
@@ -180,11 +182,13 @@ class PoseAnalyzer(
     }
 
     private fun generateDemoMetrics(): PoseMetrics = PoseMetrics(
-        swingSpeedKmh = (60f..120f).random(),
-        impactHeightCm = (70f..130f).random(),
-        kneeAngleDeg = (120f..170f).random(),
-        shoulderRotationDeg = (-45f..45f).random(),
-        elapsedSinceLastShot = (500L..3000L).random()
+        swingSpeedKmh = (40f..130f).random(),
+        impactHeightCm = (70f..170f).random(),
+        kneeAngleDeg = (110f..170f).random(),
+        shoulderRotationDeg = (-90f..90f).random(),
+        elapsedSinceLastShot = (300L..2000L).random(),
+        wristX = (0.2f..0.8f).random(),
+        wristY = (0.2f..0.8f).random(),
     )
 
     private fun ClosedFloatingPointRange<Float>.random(): Float =

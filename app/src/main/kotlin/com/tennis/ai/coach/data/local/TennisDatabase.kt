@@ -11,7 +11,7 @@ import com.tennis.ai.coach.data.model.PlayerProfile
 
 @Database(
     entities = [PlayerProfile::class, MatchReport::class, LessonReport::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class TennisDatabase : RoomDatabase() {

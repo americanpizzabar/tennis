@@ -9,6 +9,9 @@ import androidx.navigation.navArgument
 import com.tennis.ai.coach.ui.advisor.TacticalAdvisorScreen
 import com.tennis.ai.coach.ui.analysis.VideoAnalysisScreen
 import com.tennis.ai.coach.ui.home.HomeScreen
+import com.tennis.ai.coach.ui.lesson.LessonDetailScreen
+import com.tennis.ai.coach.ui.lesson.LessonListScreen
+import com.tennis.ai.coach.ui.lesson.LessonRecordScreen
 import com.tennis.ai.coach.ui.match.MatchScreen
 import com.tennis.ai.coach.ui.peer.MultiPhoneScreen
 import com.tennis.ai.coach.ui.profile.ProfileSetupScreen
@@ -28,6 +31,11 @@ sealed class Screen(val route: String) {
     }
     object TacticalAdvisor : Screen("tactical_advisor")
     object MultiPhone : Screen("multi_phone")
+    object LessonList : Screen("lesson_list")
+    object LessonRecord : Screen("lesson_record")
+    object LessonDetail : Screen("lesson_detail/{lessonId}") {
+        fun route(lessonId: String) = "lesson_detail/$lessonId"
+    }
 }
 
 @Composable
@@ -54,7 +62,10 @@ fun TennisNavHost() {
                 },
                 onOpenMultiPhone = {
                     navController.navigate(Screen.MultiPhone.route)
-                }
+                },
+                onOpenLessons = {
+                    navController.navigate(Screen.LessonList.route)
+                },
             )
         }
 
@@ -64,6 +75,33 @@ fun TennisNavHost() {
 
         composable(Screen.MultiPhone.route) {
             MultiPhoneScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.LessonList.route) {
+            LessonListScreen(
+                onBack = { navController.popBackStack() },
+                onNewLesson = { navController.navigate(Screen.LessonRecord.route) },
+                onOpenLesson = { id -> navController.navigate(Screen.LessonDetail.route(id)) },
+            )
+        }
+
+        composable(Screen.LessonRecord.route) {
+            LessonRecordScreen(
+                onBack = { navController.popBackStack() },
+                onViewLesson = { id ->
+                    navController.navigate(Screen.LessonDetail.route(id)) {
+                        popUpTo(Screen.LessonList.route)
+                    }
+                },
+            )
+        }
+
+        composable(
+            Screen.LessonDetail.route,
+            arguments = listOf(navArgument("lessonId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val lessonId = backStackEntry.arguments?.getString("lessonId") ?: ""
+            LessonDetailScreen(lessonId = lessonId, onBack = { navController.popBackStack() })
         }
 
         composable(

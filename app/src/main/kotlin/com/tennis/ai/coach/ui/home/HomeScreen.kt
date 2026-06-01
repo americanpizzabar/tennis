@@ -37,6 +37,7 @@ fun HomeScreen(
     onViewReport: (String) -> Unit,
     onOpenTacticalAdvisor: () -> Unit = {},
     onOpenMultiPhone: () -> Unit = {},
+    onOpenLessons: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var deleteCandidate by remember { mutableStateOf<com.tennis.ai.coach.data.model.MatchReport?>(null) }
@@ -130,6 +131,15 @@ fun HomeScreen(
                         onClick = { onStartMatch(MatchType.DOUBLES.name) }
                     )
                 }
+            }
+
+            item {
+                ActionCard(
+                    title = "個人レッスン",
+                    subtitle = "AI骨格診断でスイングを分析・理想フォームと比較",
+                    icon = Icons.Default.SportsTennis,
+                    onClick = onOpenLessons
+                )
             }
 
             item {

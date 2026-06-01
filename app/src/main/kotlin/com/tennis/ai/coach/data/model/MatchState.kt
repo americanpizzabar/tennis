@@ -76,7 +76,10 @@ data class PoseMetrics(
     val impactHeightCm: Float = 0f,
     val kneeAngleDeg: Float = 0f,
     val shoulderRotationDeg: Float = 0f,
-    val elapsedSinceLastShot: Long = 0L
+    val elapsedSinceLastShot: Long = 0L,
+    /** 利き手側手首の正規化座標（0〜1）。スイング軌道解析に使用。 */
+    val wristX: Float = 0.5f,
+    val wristY: Float = 0.5f,
 )
 
 @Serializable
