@@ -34,11 +34,36 @@ npm run preview  # ビルド結果のプレビュー
 
 ## デプロイ
 
-ビルド成果物は `web/dist/` の静的ファイル一式なので、以下に **そのままアップロードするだけ**：
+### Vercel（推奨・最も簡単）
 
-- **GitHub Pages**: `dist/` を `gh-pages` ブランチへ push
-- **Vercel / Netlify / Cloudflare Pages**: リポジトリを連携して `web` フォルダを root に
-- **任意の静的ホスティング**: `dist/` を S3/Firebase Hosting 等に
+リポジトリ直下に `vercel.json` を同梱しているので、**追加設定なしで Import するだけ**で動作します。
+
+1. https://vercel.com/new でリポジトリを Import
+2. **Root Directory はそのまま**（変更不要、`vercel.json` が `web/` を build 対象に指定済み）
+3. **Framework Preset は「Other」** のまま（`vercel.json` が build/output を上書き）
+4. Deploy をクリック → 数分で完了
+5. 発行された URL を友達と共有
+
+ローカルから Vercel CLI でデプロイする場合：
+```bash
+npm i -g vercel
+cd /path/to/tennis      # リポジトリ root
+vercel                  # 初回は対話的に link
+vercel --prod           # 本番デプロイ
+```
+
+### その他のホスティング
+
+ビルド成果物は `web/dist/` の静的ファイル一式：
+
+- **GitHub Pages**: `dist/` を `gh-pages` ブランチへ push（`vite.config.ts` の `base` をリポジトリ名に変更必要）
+- **Netlify**: `web/` を Base directory、`npm run build` を Build command、`dist` を Publish directory に
+- **Cloudflare Pages**: 同上
+- **任意の静的ホスティング**: `dist/` を S3 / Firebase Hosting / nginx 等に
+
+> 📝 SPA のため `/match-setup` などのパスを開いたときに 404 にならないよう、
+> **「すべてのリクエストを `index.html` にフォールバック」** する設定が必要です。
+> Vercel は同梱の `vercel.json` の `rewrites` でこれを処理しています。
 
 URL を友達に渡すだけで使ってもらえます。インストール不要。
 
