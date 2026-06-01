@@ -99,6 +99,33 @@ fun HomeScreen(
                 } ?: NoProfileCard(onClick = onEditProfile)
             }
 
+            // 機能の現実を率直に伝えるノート（プロフィール直下に1回）
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0D2C4D)),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Info, null, tint = Color(0xFF42A5F5))
+                            Spacer(Modifier.width(6.dp))
+                            Text("このアプリの使い方のコツ",
+                                color = Color(0xFF42A5F5), fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelMedium)
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "・スコア管理＋詳細スタッツが最も実用的な機能です\n" +
+                                "・着弾点は試合画面のコート図を「タップ」で記録（自動検知は不正確）\n" +
+                                "・フォーム指標は 0〜100 の相対スコア（cm/km/h は校正未対応）\n" +
+                                "・戦術ヒントはルールベース（オフライン動作）",
+                            color = Color.White, style = MaterialTheme.typography.bodySmall,
+                            lineHeight = 18.sp,
+                        )
+                    }
+                }
+            }
+
             item {
                 Text(
                     "試合を開始",

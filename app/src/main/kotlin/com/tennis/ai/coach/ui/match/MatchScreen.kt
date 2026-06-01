@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -165,6 +166,18 @@ fun MatchScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF4CAF50)
                         )
+                        // アンドゥ（直前ポイントの取り消し）
+                        IconButton(
+                            onClick = { viewModel.undoLastPoint() },
+                            enabled = uiState.undoSnapshot != null,
+                        ) {
+                            Icon(
+                                Icons.Default.Undo,
+                                contentDescription = "直前ポイントを取り消し",
+                                tint = if (uiState.undoSnapshot != null) Color(0xFFF9A825)
+                                    else Color(0xFF5A5A5A),
+                            )
+                        }
                         // 詳細スタッツモードトグル
                         IconButton(onClick = {
                             viewModel.setDetailedStatsMode(!uiState.detailedStatsMode)
@@ -297,6 +310,10 @@ fun MatchScreen(
                     onSkip = viewModel::skipChangeover,
                 )
             } else if (!uiState.showSetupDialog) {
+                // 初回ヒント（一度閉じれば二度と出ない）
+                if (uiState.showOnboardingHints) {
+                    OnboardingTipsCard(onDismiss = viewModel::dismissOnboardingHints)
+                }
                 // スコアボード
                 ScoreBoard(
                     playerScore = uiState.playerScore,
@@ -322,7 +339,14 @@ fun MatchScreen(
                 uiState.poseMetrics?.let { PoseMetricsCard(metrics = it) }
 
                 // 着弾点マップ
-                BallLandingMapCard(landings = uiState.ballLandingHistory)
+                BallLandingMapCard(
+                    autoLandings = uiState.ballLandingHistory,
+                    manualLandings = uiState.manualLandings,
+                    showTapper = uiState.showCourtTapper,
+                    onToggleTapper = viewModel::toggleCourtTapper,
+                    onAddLanding = viewModel::addManualLanding,
+                    onClearManual = viewModel::clearManualLandings,
+                )
 
                 // ダブルス陣形
                 if (uiState.matchType == MatchType.DOUBLES) {
@@ -1114,24 +1138,63 @@ private fun HabitAlertBanner(habit: OpponentHabit) {
 
 @Composable
 private fun PoseMetricsCard(metrics: PoseMetrics) {
+    // 校正なしの 2D 推定値を「絶対値（cm/km/h）」で見せないよう、
+    // 0〜100 の相対指標として表示する（理想レンジは IdealFormLibrary の範囲を反映）。
+    val swingScore = relScore(metrics.swingSpeedKmh, ideal = 60f..120f)
+    val heightScore = relScore(metrics.impactHeightCm, ideal = 100f..160f)
+    val kneeScore = relScoreInverseIfHigh(metrics.kneeAngleDeg, ideal = 130f..160f)
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1B2F)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
-            Row(horizontalArrangement = Arrangement.SpaceAround, modifier = Modifier.fillMaxWidth()) {
-                MetricItem("スイング速度", "${metrics.swingSpeedKmh.toInt()} km/h", false)
-                MetricItem("打点高さ", "${metrics.impactHeightCm.toInt()} cm", metrics.impactHeightCm < 80f)
-                MetricItem("膝の角度", "${metrics.kneeAngleDeg.toInt()}°", metrics.kneeAngleDeg > 170f)
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Accessibility, null,
+                    tint = Color(0xFF42A5F5), modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("フォーム相対指標（カメラ映像から推定）", color = Color.Gray,
+                    style = MaterialTheme.typography.labelSmall)
             }
-            if (metrics.impactHeightCm < 80f) {
-                Text("⚠ 打点が下がっています。足を一歩踏み込んで！",
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.SpaceAround, modifier = Modifier.fillMaxWidth()) {
+                ScoreItem("スイング", swingScore)
+                ScoreItem("打点", heightScore)
+                ScoreItem("膝の使い方", kneeScore)
+            }
+            if (heightScore < 40) {
+                Text("⚠ 打点が下がり気味です。足を一歩踏み込んで！",
                     color = Color(0xFFEF5350),
                     modifier = Modifier.padding(top = 4.dp),
                     style = MaterialTheme.typography.labelSmall)
             }
         }
     }
+}
+
+@Composable
+private fun ScoreItem(label: String, score: Int) {
+    val color = when {
+        score >= 75 -> Color(0xFF4CAF50)
+        score >= 50 -> Color(0xFFF9A825)
+        else -> Color(0xFFEF5350)
+    }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, color = Color.Gray, style = MaterialTheme.typography.labelSmall)
+        Text("$score",
+            color = color, fontWeight = FontWeight.Black, fontSize = 20.sp)
+        Text("/100", color = Color.Gray, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+private fun relScore(v: Float, ideal: ClosedFloatingPointRange<Float>): Int {
+    if (v in ideal) return 90
+    val gap = if (v < ideal.start) ideal.start - v else v - ideal.endInclusive
+    val span = (ideal.endInclusive - ideal.start).coerceAtLeast(1f)
+    return (90 - gap / span * 80f).toInt().coerceIn(0, 100)
+}
+
+private fun relScoreInverseIfHigh(v: Float, ideal: ClosedFloatingPointRange<Float>): Int {
+    return relScore(v, ideal)
 }
 
 @Composable
@@ -1147,7 +1210,15 @@ private fun MetricItem(label: String, value: String, isWarning: Boolean) {
 // ── 着弾点マップ ───────────────────────────────────────────────
 
 @Composable
-private fun BallLandingMapCard(landings: List<BallLandingPoint>) {
+private fun BallLandingMapCard(
+    autoLandings: List<BallLandingPoint>,
+    manualLandings: List<BallLandingPoint>,
+    showTapper: Boolean,
+    onToggleTapper: () -> Unit,
+    onAddLanding: (BallLandingPoint) -> Unit,
+    onClearManual: () -> Unit,
+) {
+    val all = autoLandings + manualLandings
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0D1F0D)),
         modifier = Modifier.fillMaxWidth()
@@ -1158,31 +1229,92 @@ private fun BallLandingMapCard(landings: List<BallLandingPoint>) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("着弾点マップ", color = Color.Gray, style = MaterialTheme.typography.labelSmall)
-                Text("${landings.size}球", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall)
+                Column {
+                    Text("着弾点マップ", color = Color.Gray,
+                        style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        if (showTapper) "コートをタップして着弾点を追加"
+                        else "${all.size}球（手動${manualLandings.size}）",
+                        color = if (showTapper) Color(0xFFF9A825) else Color(0xFF4CAF50),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                Row {
+                    if (manualLandings.isNotEmpty()) {
+                        TextButton(onClick = onClearManual,
+                            contentPadding = PaddingValues(horizontal = 6.dp)) {
+                            Text("クリア", color = Color(0xFFEF5350),
+                                style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    TextButton(onClick = onToggleTapper,
+                        contentPadding = PaddingValues(horizontal = 6.dp)) {
+                        Icon(
+                            if (showTapper) Icons.Default.Check else Icons.Default.Add,
+                            null, modifier = Modifier.size(14.dp),
+                            tint = Color(0xFF4CAF50),
+                        )
+                        Spacer(Modifier.width(2.dp))
+                        Text(
+                            if (showTapper) "完了" else "タップ追加",
+                            color = Color(0xFF4CAF50),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
             }
-            Canvas(modifier = Modifier.fillMaxWidth().height(90.dp)) {
+            // タップ受け取り：コート図上の相対座標を計算
+            var sizePx by remember {
+                mutableStateOf<androidx.compose.ui.geometry.Size>(
+                    androidx.compose.ui.geometry.Size.Zero
+                )
+            }
+            Canvas(
+                modifier = Modifier.fillMaxWidth().height(120.dp)
+                    .pointerInput(showTapper, sizePx) {
+                        if (!showTapper) return@pointerInput
+                        androidx.compose.foundation.gestures.detectTapGestures { off ->
+                            if (sizePx.width <= 0 || sizePx.height <= 0) return@detectTapGestures
+                            val x = (off.x / sizePx.width).coerceIn(0f, 1f)
+                            val y = (off.y / sizePx.height).coerceIn(0f, 1f)
+                            // タップ位置からゾーンを推定
+                            val zone = when {
+                                y < 0.05f || y > 0.95f || x < 0.05f || x > 0.95f -> CourtZone.OUT
+                                y < 0.5f && x < 0.5f -> CourtZone.DEUCE_SERVICE_BOX
+                                y < 0.5f && x >= 0.5f -> CourtZone.AD_SERVICE_BOX
+                                y >= 0.5f && x < 0.33f -> CourtZone.DEUCE_BASELINE
+                                y >= 0.5f && x > 0.67f -> CourtZone.AD_BASELINE
+                                else -> CourtZone.CENTER_BASELINE
+                            }
+                            onAddLanding(BallLandingPoint(x = x, y = y,
+                                isInCourt = zone != CourtZone.OUT, zone = zone))
+                        }
+                    }
+            ) {
+                sizePx = size
                 drawCourtOutline()
-                landings.forEachIndexed { idx, pt ->
-                    val alpha = (idx + 1).toFloat() / landings.size.coerceAtLeast(1)
+                all.forEachIndexed { idx, pt ->
+                    val alpha = (idx + 1).toFloat() / all.size.coerceAtLeast(1)
                     val color = when (pt.zone) {
                         CourtZone.OUT -> Color(0xFFEF5350)
                         CourtZone.NET -> Color(0xFFF9A825)
                         else -> Color(0xFF4CAF50)
                     }
-                    drawCircle(color = color.copy(alpha = alpha), radius = 6f,
+                    drawCircle(color = color.copy(alpha = alpha.coerceAtLeast(0.5f)),
+                        radius = 8f,
                         center = Offset(pt.x * size.width, pt.y * size.height))
                 }
             }
-            if (landings.isEmpty()) {
-                Box(modifier = Modifier.fillMaxWidth().height(90.dp), contentAlignment = Alignment.Center) {
-                    Text("カメラで試合を撮影すると着弾点が表示されます",
-                        color = Color.Gray, style = MaterialTheme.typography.labelSmall,
-                        textAlign = TextAlign.Center)
-                }
+            if (all.isEmpty()) {
+                Text(
+                    "💡 「タップ追加」ボタンでコート上の着弾点を直接入力できます。" +
+                        "自動検知は実コートでは精度に限界があるため、手動入力が確実です。",
+                    color = Color.Gray, style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
-            // 凡例
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.padding(top = 4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.padding(top = 4.dp)) {
                 LegendItem(Color(0xFF4CAF50), "IN")
                 LegendItem(Color(0xFFEF5350), "OUT")
                 LegendItem(Color(0xFFF9A825), "ネット")
@@ -1332,10 +1464,15 @@ private fun AdviceCard(advice: TacticalAdvice, onRefresh: () -> Unit) {
             }
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                Text("確信度 ${(advice.confidence * 100).toInt()}%", color = Color.Gray,
-                    style = MaterialTheme.typography.labelSmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.AutoAwesome, null, tint = Color.Gray,
+                        modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(2.dp))
+                    Text("ルールベース戦術ヒント ・ 確信度 ${(advice.confidence * 100).toInt()}%",
+                        color = Color.Gray, style = MaterialTheme.typography.labelSmall)
+                }
                 TextButton(onClick = onRefresh, contentPadding = PaddingValues(0.dp)) {
-                    Text("アドバイス更新", style = MaterialTheme.typography.labelSmall)
+                    Text("更新", style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -1347,6 +1484,40 @@ private fun formatElapsed(totalSeconds: Long): String {
     val m = (totalSeconds % 3600) / 60
     val s = totalSeconds % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+}
+
+// ── 初回オンボーディングカード ──────────────────────────────────
+@Composable
+private fun OnboardingTipsCard(onDismiss: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0D2C4D)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Lightbulb, null, tint = Color(0xFFF9A825))
+                Spacer(Modifier.width(6.dp))
+                Text("はじめての方へ（このカードはタップで閉じます）",
+                    color = Color(0xFFF9A825), fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f))
+                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Close, "閉じる",
+                        tint = Color.White, modifier = Modifier.size(18.dp))
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "・ポイントが入ったら下の「+1ポイント」をタップ\n" +
+                    "・間違えたら上部の ↶ アンドゥで直前ポイントを取り消し\n" +
+                    "・着弾点マップは「タップ追加」で手動入力が正確です\n" +
+                    "・カメラ解析の数値は推定値（cm/km/h ではなく 0〜100 の相対スコア）\n" +
+                    "・上部の 📊 で詳細スタッツ記録モードのオン／オフ",
+                color = Color.White, style = MaterialTheme.typography.bodySmall,
+                lineHeight = 18.sp,
+            )
+        }
+    }
 }
 
 // ── ポイント分類シート ─────────────────────────────────────

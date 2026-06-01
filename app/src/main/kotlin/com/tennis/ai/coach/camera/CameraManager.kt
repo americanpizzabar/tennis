@@ -97,6 +97,13 @@ class CameraManager @Inject constructor(
         true
     }.getOrDefault(false)
 
+    /**
+     * 実コートでは色ベースのボール検知（BallTracker）の精度が極めて低いため
+     * デフォルトでは無効化し、ポーズ解析だけ走らせる。
+     * 着弾点は MatchScreen のタップ手動入力で記録する設計。
+     */
+    @Volatile var ballTrackingEnabled: Boolean = false
+
     private fun processFrame(imageProxy: ImageProxy) {
         val bitmap = imageProxy.toBitmap() ?: run {
             imageProxy.close()
@@ -106,11 +113,11 @@ class CameraManager @Inject constructor(
         val timestamp = imageProxy.imageInfo.timestamp / 1_000_000  // ns → ms
 
         // bitmap は recycle しない：MediaPipe LIVE_STREAM が非同期で参照を保持するため。
-        // GC に任せて安全側に倒す。BallTracker は内部でスケール時にコピーするので影響なし。
+        // GC に任せて安全側に倒す。
         scope.launch {
             runCatching {
                 poseAnalyzer.analyzeFrame(bitmap, timestamp)
-                ballTracker.processFrame(bitmap, timestamp)
+                if (ballTrackingEnabled) ballTracker.processFrame(bitmap, timestamp)
             }
         }
 

@@ -76,6 +76,29 @@ data class MatchUiState(
     val cumulativeFirstServeAttempts: Int = 0,
     val cumulativeFirstServeIn: Int = 0,
     val cumulativeSecondServeAttempts: Int = 0,
+    // ユーザーが手動でマークした着弾点（自動検知は不正確なため手動入力推奨）
+    val manualLandings: List<BallLandingPoint> = emptyList(),
+    val showCourtTapper: Boolean = false,
+    // オンボーディング（初回ヒント）
+    val showOnboardingHints: Boolean = true,
+    // アンドゥ可能な直前スナップショット（最大 1 段）
+    val undoSnapshot: UndoSnapshot? = null,
+)
+
+/** スコア訂正用のアンドゥ情報。 */
+data class UndoSnapshot(
+    val playerScore: ScoreState,
+    val opponentScore: ScoreState,
+    val phase: MatchPhase,
+    val servingPlayer: ServingPlayer,
+    val deuceCountThisGame: Int,
+    val isChangeover: Boolean,
+    val changeoverSecondsLeft: Int,
+    val pointAnalyses: List<PointAnalysisSnapshot>,
+    val cumulativeFirstServeAttempts: Int,
+    val cumulativeFirstServeIn: Int,
+    val cumulativeSecondServeAttempts: Int,
+    val firstServeFaultedThisPoint: Boolean,
 )
 
 /** ポイント獲得直後の分類待ち情報。シートで category 等を埋めて確定させる。 */
@@ -357,6 +380,49 @@ class MatchViewModel @Inject constructor(
         _uiState.update { it.copy(detailedStatsMode = enabled) }
     }
 
+    /** 直前ポイントを取り消し、スコアと累積カウンタを 1 つ前の状態に戻す。 */
+    fun undoLastPoint() {
+        val snap = _uiState.value.undoSnapshot ?: return
+        // チェンジオーバーのタイマーが動いていれば停止
+        changeoverJob?.cancel()
+        _uiState.update {
+            it.copy(
+                playerScore = snap.playerScore,
+                opponentScore = snap.opponentScore,
+                phase = snap.phase,
+                servingPlayer = snap.servingPlayer,
+                deuceCountThisGame = snap.deuceCountThisGame,
+                isChangeover = snap.isChangeover,
+                changeoverSecondsLeft = snap.changeoverSecondsLeft,
+                pointAnalyses = snap.pointAnalyses,
+                cumulativeFirstServeAttempts = snap.cumulativeFirstServeAttempts,
+                cumulativeFirstServeIn = snap.cumulativeFirstServeIn,
+                cumulativeSecondServeAttempts = snap.cumulativeSecondServeAttempts,
+                firstServeFaultedThisPoint = snap.firstServeFaultedThisPoint,
+                undoSnapshot = null,    // 1 段のみアンドゥ可能
+                pendingPoint = null,
+            )
+        }
+    }
+
+    fun addManualLanding(point: BallLandingPoint) {
+        _uiState.update {
+            it.copy(manualLandings = (it.manualLandings + point).takeLast(100))
+        }
+    }
+
+    fun clearManualLandings() {
+        _uiState.update { it.copy(manualLandings = emptyList()) }
+    }
+
+    fun toggleCourtTapper() {
+        _uiState.update { it.copy(showCourtTapper = !it.showCourtTapper) }
+    }
+
+    fun dismissOnboardingHints() {
+        _uiState.update { it.copy(showOnboardingHints = false) }
+    }
+
     private fun commitScore(
         isPlayer: Boolean,
         category: PointCategory,
@@ -365,6 +431,21 @@ class MatchViewModel @Inject constructor(
         rallyLength: Int,
     ) {
         val before = _uiState.value
+        // アンドゥ用：commit する直前の状態を保存
+        val undo = UndoSnapshot(
+            playerScore = before.playerScore,
+            opponentScore = before.opponentScore,
+            phase = before.phase,
+            servingPlayer = before.servingPlayer,
+            deuceCountThisGame = before.deuceCountThisGame,
+            isChangeover = before.isChangeover,
+            changeoverSecondsLeft = before.changeoverSecondsLeft,
+            pointAnalyses = before.pointAnalyses,
+            cumulativeFirstServeAttempts = before.cumulativeFirstServeAttempts,
+            cumulativeFirstServeIn = before.cumulativeFirstServeIn,
+            cumulativeSecondServeAttempts = before.cumulativeSecondServeAttempts,
+            firstServeFaultedThisPoint = before.firstServeFaultedThisPoint,
+        )
         val pending = before.pendingPoint
         val playerWasServing = pending?.playerWasServing
             ?: (before.servingPlayer == ServingPlayer.PLAYER)
@@ -421,6 +502,7 @@ class MatchViewModel @Inject constructor(
                 cumulativeFirstServeAttempts = newFirstAttempts,
                 cumulativeFirstServeIn = newFirstIn,
                 cumulativeSecondServeAttempts = newSecondAttempts,
+                undoSnapshot = undo,
             )
         }
         requestAdvice()
