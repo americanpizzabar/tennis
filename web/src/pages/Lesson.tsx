@@ -8,19 +8,34 @@ import { saveLessonReport } from '../lib/db'
 import type { LessonReport, SavedFrame } from '../types/lesson'
 import { KEY_LANDMARKS } from '../types/lesson'
 
-type Phase = 'SELECT_SHOT' | 'CAMERA_SETUP' | 'RECORDING' | 'ANALYZING' | 'DONE'
+type Source = 'LIVE' | 'UPLOAD'
+type Phase =
+  | 'SELECT_SHOT'
+  | 'SELECT_SOURCE'
+  | 'CAMERA_SETUP'
+  | 'RECORDING'
+  | 'UPLOAD_PICK'
+  | 'UPLOAD_PROCESSING'
+  | 'ANALYZING'
 
 export function LessonPage() {
   const nav = useNavigate()
   const [phase, setPhase] = useState<Phase>('SELECT_SHOT')
   const [shot, setShot] = useState<Shot>('FOREHAND')
   const [side, setSide] = useState<'RIGHT' | 'LEFT'>('RIGHT')
+  const [source, setSource] = useState<Source>('LIVE')
   const [error, setError] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [previewLm, setPreviewLm] = useState<PoseFrame | null>(null)
   const [modelReady, setModelReady] = useState(false)
   const [analysisProgress, setAnalysisProgress] = useState(0)
+
+  // アップロード処理用
+  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadFileName, setUploadFileName] = useState<string | null>(null)
+  const cancelRef = useRef(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -29,16 +44,20 @@ export function LessonPage() {
   const recordStartRef = useRef(0)
   const lastTsRef = useRef(0)
 
-  // モデルウォームアップ
+  // ── モデルウォームアップ（カメラ／アップロード両モードで必要） ──
   useEffect(() => {
-    if (phase !== 'CAMERA_SETUP' && phase !== 'RECORDING') return
+    const needsModel =
+      phase === 'CAMERA_SETUP' || phase === 'RECORDING' ||
+      phase === 'UPLOAD_PICK' || phase === 'UPLOAD_PROCESSING'
+    if (!needsModel) return
     warmupPoseModel().then(() => setModelReady(true)).catch(e => {
       setError('AI モデルのロードに失敗しました：' + (e?.message ?? String(e)))
     })
   }, [phase])
 
-  // カメラ起動
+  // ── カメラ起動（ライブモードのみ） ──
   useEffect(() => {
+    if (source !== 'LIVE') return
     if (phase !== 'CAMERA_SETUP' && phase !== 'RECORDING') return
     const start = async () => {
       try {
@@ -58,28 +77,26 @@ export function LessonPage() {
       }
     }
     start()
-    return () => {
-      // 画面を離れる時のみ停止（フェーズ切替では維持）
-    }
-  }, [phase])
+  }, [phase, source])
 
-  // クリーンアップ
+  // ── クリーンアップ ──
   useEffect(() => () => {
+    cancelRef.current = true
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop())
       streamRef.current = null
     }
-  }, [])
+    if (uploadedUrl) URL.revokeObjectURL(uploadedUrl)
+  }, [uploadedUrl])
 
-  // 推論ループ
+  // ── ライブカメラ用：推論ループ ──
   const loop = async () => {
     if (!videoRef.current || videoRef.current.readyState < 2) {
       rafRef.current = requestAnimationFrame(loop)
       return
     }
     const tMs = performance.now()
-    // タイムスタンプは単調増加が必須
     const ts = Math.max(lastTsRef.current + 1, Math.floor(tMs))
     lastTsRef.current = ts
     try {
@@ -95,8 +112,8 @@ export function LessonPage() {
     rafRef.current = requestAnimationFrame(loop)
   }
 
-  // 録画フェーズに入ったら推論ループ開始
   useEffect(() => {
+    if (source !== 'LIVE') return
     if (phase !== 'CAMERA_SETUP' && phase !== 'RECORDING') return
     if (!modelReady) return
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
@@ -105,9 +122,9 @@ export function LessonPage() {
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, modelReady, recording])
+  }, [phase, modelReady, recording, source])
 
-  // 経過秒
+  // ── 経過秒（ライブ録画用） ──
   useEffect(() => {
     if (!recording) return
     const tid = window.setInterval(() => {
@@ -116,48 +133,153 @@ export function LessonPage() {
     return () => clearInterval(tid)
   }, [recording])
 
+  // ── ライブ録画 開始／停止 ──
   const startRecording = () => {
     framesRef.current = []
     recordStartRef.current = Date.now()
     setElapsed(0)
     setRecording(true)
   }
-
   const stopRecordingAndAnalyze = async () => {
     setRecording(false)
+    await runAnalysisAndSave(elapsed)
+  }
+
+  // ── 動画アップロード処理 ──
+  const onFilePicked = async (file: File) => {
+    if (!file.type.startsWith('video/')) {
+      setError('動画ファイルを選択してください（mp4, mov など）。')
+      return
+    }
+    if (uploadedUrl) URL.revokeObjectURL(uploadedUrl)
+    const url = URL.createObjectURL(file)
+    setUploadedUrl(url)
+    setUploadFileName(file.name)
+    setError(null)
+    setPhase('UPLOAD_PROCESSING')
+  }
+
+  // ── 動画アップロード：UPLOAD_PROCESSING に入ったら自動処理開始 ──
+  useEffect(() => {
+    if (phase !== 'UPLOAD_PROCESSING' || !uploadedUrl || !modelReady) return
+    let cancelled = false
+    cancelRef.current = false
+    const process = async () => {
+      if (!videoRef.current) return
+      const video = videoRef.current
+      framesRef.current = []
+      setUploadProgress(0)
+      lastTsRef.current = 0
+
+      try {
+        // 動画をロード
+        video.srcObject = null
+        video.src = uploadedUrl
+        video.muted = true
+        video.playsInline = true
+        // 高速処理のため再生速度を上げる
+        video.playbackRate = 2
+
+        await new Promise<void>((resolve, reject) => {
+          const onLoaded = () => {
+            video.removeEventListener('loadedmetadata', onLoaded)
+            video.removeEventListener('error', onErr)
+            resolve()
+          }
+          const onErr = () => {
+            video.removeEventListener('loadedmetadata', onLoaded)
+            video.removeEventListener('error', onErr)
+            reject(new Error('動画のロードに失敗しました'))
+          }
+          video.addEventListener('loadedmetadata', onLoaded)
+          video.addEventListener('error', onErr)
+        })
+
+        const duration = video.duration
+        if (!isFinite(duration) || duration <= 0) {
+          throw new Error('動画の長さを取得できません')
+        }
+
+        await video.play()
+
+        // 再生中にフレームを取得
+        await new Promise<void>((resolve) => {
+          let lastSampleMs = -1
+          const step = async () => {
+            if (cancelled || cancelRef.current) { resolve(); return }
+            if (video.ended || video.paused) { resolve(); return }
+            const tSec = video.currentTime
+            const tMs = Math.floor(tSec * 1000)
+            // 同じ ms が何度も来るのを防ぐ
+            if (tMs > lastSampleMs) {
+              lastSampleMs = tMs
+              const ts = Math.max(lastTsRef.current + 1, tMs)
+              lastTsRef.current = ts
+              try {
+                const frame = await detectVideoFrame(video, ts)
+                framesRef.current.push({ ...frame, tSec })
+                setPreviewLm(frame)
+              } catch {
+                // 単フレーム失敗は無視
+              }
+              setUploadProgress(Math.min(99, Math.round((tSec / duration) * 100)))
+            }
+            requestAnimationFrame(step)
+          }
+          requestAnimationFrame(step)
+        })
+
+        if (cancelled || cancelRef.current) return
+        setUploadProgress(100)
+
+        if (framesRef.current.length === 0) {
+          throw new Error('骨格を検出できませんでした。体全体が映る動画でお試しください。')
+        }
+        await runAnalysisAndSave(Math.round(duration))
+      } catch (e: any) {
+        if (!cancelled) {
+          setError(e?.message ?? String(e))
+          setPhase('UPLOAD_PICK')
+        }
+      }
+    }
+    process()
+    return () => { cancelled = true }
+  }, [phase, uploadedUrl, modelReady])
+
+  // ── 解析＋保存（ライブ／アップロード共通） ──
+  const runAnalysisAndSave = async (durationSec: number) => {
     setPhase('ANALYZING')
     setAnalysisProgress(20)
-    // バックグラウンドで解析
-    setTimeout(async () => {
-      try {
-        const frames = framesRef.current
-        setAnalysisProgress(50)
-        const analysis = analyzeSession(shot, side, frames)
-        setAnalysisProgress(80)
-        const saved: SavedFrame[] = compressFrames(frames, 240)
-        const lessonId = randomId()
-        const report: LessonReport = {
-          lessonId,
-          shot,
-          side,
-          durationSeconds: elapsed,
-          swingCount: analysis.swingCount,
-          overallScore: analysis.overallScore,
-          coachingText: analysis.coachingText,
-          checkpoints: analysis.checkpoints,
-          drills: analysis.drills,
-          impactPoints: analysis.impactPoints,
-          frames: saved,
-          createdAt: Date.now(),
-        }
-        await saveLessonReport(report)
-        setAnalysisProgress(100)
-        nav(`/lesson/${lessonId}`, { replace: true })
-      } catch (e: any) {
-        setError('解析失敗：' + (e?.message ?? String(e)))
-        setPhase('CAMERA_SETUP')
+    await new Promise(r => setTimeout(r, 50))
+    try {
+      const frames = framesRef.current
+      setAnalysisProgress(50)
+      const analysis = analyzeSession(shot, side, frames)
+      setAnalysisProgress(80)
+      const saved: SavedFrame[] = compressFrames(frames, 240)
+      const lessonId = randomId()
+      const report: LessonReport = {
+        lessonId,
+        shot,
+        side,
+        durationSeconds: durationSec,
+        swingCount: analysis.swingCount,
+        overallScore: analysis.overallScore,
+        coachingText: analysis.coachingText,
+        checkpoints: analysis.checkpoints,
+        drills: analysis.drills,
+        impactPoints: analysis.impactPoints,
+        frames: saved,
+        createdAt: Date.now(),
       }
-    }, 100)
+      await saveLessonReport(report)
+      setAnalysisProgress(100)
+      nav(`/lesson/${lessonId}`, { replace: true })
+    } catch (e: any) {
+      setError('解析失敗：' + (e?.message ?? String(e)))
+      setPhase(source === 'LIVE' ? 'CAMERA_SETUP' : 'UPLOAD_PICK')
+    }
   }
 
   return (
@@ -168,9 +290,12 @@ export function LessonPage() {
           <h1 className="font-bold">個人レッスン（AI 骨格診断）</h1>
           <p className="text-xs text-gray-400">
             {phase === 'SELECT_SHOT' && 'ショットを選んでください'}
+            {phase === 'SELECT_SOURCE' && '解析する映像のソースを選択'}
             {phase === 'CAMERA_SETUP' && 'カメラを構えて準備'}
-            {phase === 'RECORDING' && '解析中...'}
-            {phase === 'ANALYZING' && 'AI 解析中...'}
+            {phase === 'RECORDING' && '録画中...'}
+            {phase === 'UPLOAD_PICK' && '動画ファイルを選択'}
+            {phase === 'UPLOAD_PROCESSING' && '動画を解析中...'}
+            {phase === 'ANALYZING' && 'AI 診断生成中...'}
           </p>
         </div>
       </header>
@@ -183,10 +308,17 @@ export function LessonPage() {
 
       {phase === 'SELECT_SHOT' && (
         <ShotSelector shot={shot} setShot={setShot} side={side} setSide={setSide}
-          onNext={() => setPhase('CAMERA_SETUP')} />
+          onNext={() => setPhase('SELECT_SOURCE')} />
       )}
 
-      {(phase === 'CAMERA_SETUP' || phase === 'RECORDING') && (
+      {phase === 'SELECT_SOURCE' && (
+        <SourceSelector
+          onLive={() => { setSource('LIVE'); setPhase('CAMERA_SETUP') }}
+          onUpload={() => { setSource('UPLOAD'); setPhase('UPLOAD_PICK') }}
+        />
+      )}
+
+      {(phase === 'CAMERA_SETUP' || phase === 'RECORDING') && source === 'LIVE' && (
         <CameraPanel
           videoRef={videoRef}
           previewLm={previewLm}
@@ -196,6 +328,28 @@ export function LessonPage() {
           framesCount={framesRef.current.length}
           onStart={startRecording}
           onStop={stopRecordingAndAnalyze}
+        />
+      )}
+
+      {phase === 'UPLOAD_PICK' && (
+        <UploadPanel
+          modelReady={modelReady}
+          onFilePicked={onFilePicked}
+          previousFileName={uploadFileName}
+        />
+      )}
+
+      {phase === 'UPLOAD_PROCESSING' && (
+        <UploadProcessingPanel
+          videoRef={videoRef}
+          previewLm={previewLm}
+          progress={uploadProgress}
+          framesCount={framesRef.current.length}
+          fileName={uploadFileName}
+          onCancel={() => {
+            cancelRef.current = true
+            setPhase('UPLOAD_PICK')
+          }}
         />
       )}
 
@@ -223,8 +377,8 @@ function ShotSelector({ shot, setShot, side, setSide, onNext }: {
   return (
     <div className="space-y-4">
       <div className="bg-blue-950/60 rounded-xl p-3 text-xs">
-        💡 <strong>撮影のコツ</strong>：体の真横に三脚で設置（コートサイドのフェンス利用が便利）。
-        全身が映る距離で、利き腕側を真横から撮影すると診断精度が上がります。
+        💡 <strong>撮影のコツ</strong>：体の真横から、利き腕側を映すと診断精度が上がります。
+        全身が映る距離で、できるだけ三脚などで固定。
       </div>
 
       <div>
@@ -260,8 +414,44 @@ function ShotSelector({ shot, setShot, side, setSide, onNext }: {
 
       <button onClick={onNext}
         className="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-3 rounded-xl active:scale-95 transition">
-        カメラを準備 →
+        次へ →
       </button>
+    </div>
+  )
+}
+
+function SourceSelector({ onLive, onUpload }: {
+  onLive: () => void; onUpload: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="text-sm text-gray-400">解析するソースを選択してください</div>
+      <button onClick={onLive}
+        className="w-full bg-court-card hover:bg-emerald-900 rounded-xl p-4 flex items-center gap-3 transition active:scale-[0.98] text-left">
+        <span className="text-3xl">📹</span>
+        <div className="flex-1">
+          <div className="font-bold">ライブカメラで撮影</div>
+          <div className="text-xs text-gray-400">
+            その場で動画を撮影しながらリアルタイムに解析
+          </div>
+        </div>
+        <span className="text-gray-500">›</span>
+      </button>
+      <button onClick={onUpload}
+        className="w-full bg-court-card hover:bg-emerald-900 rounded-xl p-4 flex items-center gap-3 transition active:scale-[0.98] text-left">
+        <span className="text-3xl">📁</span>
+        <div className="flex-1">
+          <div className="font-bold">動画ファイルをアップロード</div>
+          <div className="text-xs text-gray-400">
+            すでに撮影した動画（mp4, mov 等）を選んで解析
+          </div>
+        </div>
+        <span className="text-gray-500">›</span>
+      </button>
+      <div className="bg-blue-950/60 rounded-xl p-3 text-xs text-white/80 leading-relaxed">
+        💡 <strong>ヒント</strong>：いつもの練習を 10〜30 秒ほど撮影した動画でも十分解析できます。
+        動画は端末からはアップロードされず、ブラウザ内だけで処理されます（プライバシー保護）。
+      </div>
     </div>
   )
 }
@@ -319,6 +509,107 @@ function CameraPanel({ videoRef, previewLm, modelReady, recording, elapsed, fram
           ⏹ 録画停止 → AI 診断
         </button>
       )}
+    </div>
+  )
+}
+
+function UploadPanel({ modelReady, onFilePicked, previousFileName }: {
+  modelReady: boolean;
+  onFilePicked: (file: File) => void;
+  previousFileName: string | null;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  return (
+    <div className="space-y-3">
+      <div className="bg-court-card rounded-xl p-4">
+        <div className="text-court-warning font-bold text-sm mb-2">📁 動画ファイルを選択</div>
+        <div className="text-xs text-gray-400 mb-4 leading-relaxed">
+          mp4 / mov / webm 等の動画ファイルを選んでください。
+          目安 5〜60 秒、解像度 720p 程度が推奨です。<br />
+          長すぎる動画は処理時間がかかります（再生速度の 2 倍で解析します）。
+        </div>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="video/*"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) onFilePicked(f)
+            e.target.value = ''
+          }}
+          className="hidden"
+        />
+        <button
+          onClick={() => inputRef.current?.click()}
+          disabled={!modelReady}
+          className="w-full bg-green-700 hover:bg-green-600 disabled:bg-gray-700 text-white font-bold py-3 rounded-xl active:scale-95 transition"
+        >
+          📂 動画ファイルを選ぶ
+        </button>
+        {!modelReady && (
+          <div className="text-center text-xs text-gray-400 mt-2">
+            AI モデルをロード中... 完了後にアップロード可能になります
+          </div>
+        )}
+        {previousFileName && (
+          <div className="text-xs text-gray-500 mt-2 truncate">
+            前回：{previousFileName}
+          </div>
+        )}
+      </div>
+      <div className="bg-blue-950/60 rounded-xl p-3 text-xs text-white/80 leading-relaxed">
+        🎬 <strong>撮影のコツ</strong>：
+        体の真横、全身が映る距離、横向きの動画がベスト。
+        同じショットを 5 本以上含めるとスイングのばらつき診断が可能になります。
+      </div>
+    </div>
+  )
+}
+
+function UploadProcessingPanel({ videoRef, previewLm, progress, framesCount, fileName, onCancel }: {
+  videoRef: React.RefObject<HTMLVideoElement>;
+  previewLm: PoseFrame | null;
+  progress: number;
+  framesCount: number;
+  fileName: string | null;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="relative bg-black rounded-xl overflow-hidden aspect-video">
+        <video ref={videoRef} playsInline muted
+          className="absolute inset-0 w-full h-full object-contain" />
+        <SkeletonOverlay
+          landmarks={previewLm?.landmarks ?? null}
+          width={640} height={360}
+        />
+        <div className="absolute top-2 left-2 bg-black/60 rounded px-2 py-1 flex items-center gap-1">
+          <span className="w-2 h-2 bg-court-warning rounded-full animate-pulse" />
+          <span className="text-court-warning text-xs font-bold">解析中 {progress}%</span>
+        </div>
+      </div>
+
+      <div className="w-full bg-court-card rounded-full h-2 overflow-hidden">
+        <div className="bg-court-accent h-full transition-all"
+          style={{ width: `${progress}%` }} />
+      </div>
+
+      <div className="bg-court-card rounded-xl p-3 grid grid-cols-3 text-center">
+        <Stat label="進捗" value={`${progress}%`} />
+        <Stat label="フレーム" value={`${framesCount}`} />
+        <Stat label="検知" value={previewLm?.landmarks ? '✓' : '—'} />
+      </div>
+
+      {fileName && (
+        <div className="text-xs text-gray-400 text-center truncate">{fileName}</div>
+      )}
+
+      <button
+        onClick={onCancel}
+        className="w-full bg-court-card hover:bg-red-900 text-court-danger font-bold py-2 rounded-xl active:scale-95 transition"
+      >
+        ✕ キャンセル
+      </button>
     </div>
   )
 }
