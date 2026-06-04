@@ -57,6 +57,13 @@ export function HomePage() {
       </div>
 
       <ActionRow
+        title="個人レッスン（AI 骨格診断）"
+        subtitle="カメラの前でスイング → 関節角度＋運動連鎖を分析"
+        emoji="🤖"
+        onClick={() => nav('/lessons')}
+      />
+
+      <ActionRow
         title="戦術アドバイザー"
         subtitle="状況を選ぶだけでプロの戦術を提案"
         emoji="💡"

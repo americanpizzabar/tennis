@@ -1,23 +1,28 @@
 import { openDB, IDBPDatabase } from 'idb'
 import type { MatchReport } from '../types/match'
+import type { LessonReport } from '../types/lesson'
 
 const DB_NAME = 'tennis-ai-coach'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE_REPORTS = 'match_reports'
 const STORE_SETTINGS = 'settings'
+const STORE_LESSONS = 'lesson_reports'
 
 let dbPromise: Promise<IDBPDatabase> | null = null
 
 function getDb(): Promise<IDBPDatabase> {
   if (!dbPromise) {
     dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        if (!db.objectStoreNames.contains(STORE_REPORTS)) {
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
           const s = db.createObjectStore(STORE_REPORTS, { keyPath: 'matchId' })
           s.createIndex('createdAt', 'createdAt')
-        }
-        if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
           db.createObjectStore(STORE_SETTINGS)
+        }
+        if (oldVersion < 2) {
+          const l = db.createObjectStore(STORE_LESSONS, { keyPath: 'lessonId' })
+          l.createIndex('createdAt', 'createdAt')
+          l.createIndex('shot', 'shot')
         }
       },
     })
@@ -54,4 +59,26 @@ export async function getSetting<T = unknown>(key: string): Promise<T | undefine
 export async function putSetting(key: string, value: unknown): Promise<void> {
   const db = await getDb()
   await db.put(STORE_SETTINGS, value, key)
+}
+
+// ── レッスン記録 ─────────────────────────────────────────
+export async function saveLessonReport(report: LessonReport): Promise<void> {
+  const db = await getDb()
+  await db.put(STORE_LESSONS, report)
+}
+
+export async function getAllLessonReports(): Promise<LessonReport[]> {
+  const db = await getDb()
+  const all = await db.getAllFromIndex(STORE_LESSONS, 'createdAt')
+  return all.reverse() as LessonReport[]
+}
+
+export async function getLessonReport(lessonId: string): Promise<LessonReport | undefined> {
+  const db = await getDb()
+  return (await db.get(STORE_LESSONS, lessonId)) as LessonReport | undefined
+}
+
+export async function deleteLessonReport(lessonId: string): Promise<void> {
+  const db = await getDb()
+  await db.delete(STORE_LESSONS, lessonId)
 }
