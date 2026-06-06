@@ -76,9 +76,13 @@ export type VisionConeRole = 'YOU' | 'PARTNER' | 'OPP1' | 'OPP2' | 'ALL' | 'NONE
 export type ScenarioCategory =
   | 'SINGLES_POSITIONING'
   | 'SINGLES_PATTERN'
+  | 'SINGLES_SERVE'
+  | 'SINGLES_RETURN'
+  | 'SINGLES_DEFENSE'
   | 'DOUBLES_PARALLEL'
   | 'DOUBLES_OPPOSITE'
   | 'DOUBLES_I_FORMATION'
+  | 'DOUBLES_NET'
 
 export interface Scenario {
   id: string
@@ -107,7 +111,11 @@ export interface Scenario {
 export const CATEGORY_LABEL: Record<ScenarioCategory, string> = {
   SINGLES_POSITIONING: 'シングルス・幾何学（戻り位置）',
   SINGLES_PATTERN: 'シングルス・配球パターン',
+  SINGLES_SERVE: 'シングルス・サーブ展開',
+  SINGLES_RETURN: 'シングルス・リターン',
+  SINGLES_DEFENSE: 'シングルス・守備／立て直し',
   DOUBLES_PARALLEL: 'ダブルス・並行陣',
   DOUBLES_OPPOSITE: 'ダブルス・雁行陣',
   DOUBLES_I_FORMATION: 'ダブルス・I フォーメーション',
+  DOUBLES_NET: 'ダブルス・ネットプレー',
 }

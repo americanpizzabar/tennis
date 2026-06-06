@@ -1,434 +1,437 @@
 import type { Scenario } from './types'
+import { buildRally, RallyDef } from './rallyBuilder'
 
 /**
- * 代表的な戦術シナリオ集。実コートの実寸（メートル）でキーフレームを記述。
+ * 戦術シナリオ集。すべて buildRally で生成するため
+ * 「ボールは打点かバウンドでしか方向を変えない」ことが保証される。
  *
- * コート寸法（メートル）：
- *  - シングルス幅: 8.23 m （±4.115）
- *  - ダブルス幅: 10.97 m（±5.485）
- *  - 全長: 23.77 m（ベースライン z=±11.885）
- *  - サービスライン: z=±6.40
+ * 座標系（メートル）：
+ *  - NEAR（自分側）= z<0、FAR（相手側）= z>0
+ *  - ネット z=0、ベースライン z=±11.885、サービスライン z=±6.4
+ *  - シングルス幅 ±4.115、ダブルス幅 ±5.485
+ *  - y は高さ（打点 ≈ 1.0、バウンド = 0）
  */
 
-// ── シングルス：バイセクト戻り位置（ストレート深く打った後） ──
-// 高精度化：視野コーンとターゲットゲートを追加して空間認知を強化
-const singlesBisectStraight: Scenario = {
-  visionConesOf: 'ALL',
-  pressureRange: { startMs: 3000, endMs: 6000 },
-  targetGates: [
-    { tMs: 0,    pos: [-3.5, 1.0, 9.5], normal: [0, 0, -1], radius: 0.9, visible: true, label: '深く狙う' },
-    { tMs: 2400, pos: [-3.5, 1.0, 9.5], normal: [0, 0, -1], radius: 0.6, visible: false },
-    { tMs: 3000, pos: [-2, 1.0, -10], normal: [0, 0, 1], radius: 1.2, visible: true, label: '🎯 二等分線上に戻る' },
-    { tMs: 6500, pos: [-2, 1.0, -10], normal: [0, 0, 1], radius: 0.5, visible: false },
-  ],
-  id: 'singles_bisect_straight',
+const GREEN = '#4CAF50'
+const BLUE = '#42A5F5'
+const RED = '#EF5350'
+
+// ════════════════════════════════════════════════════════════
+//  シングルス
+// ════════════════════════════════════════════════════════════
+
+// ── 戻り位置（バイセクト） ──
+const singlesBisect: RallyDef = {
+  id: 'singles_bisect',
   category: 'SINGLES_POSITIONING',
   title: 'バイセクト戻り：ストレート深く',
-  subtitle: '相手バックハンド奥にストレートで打った後の戻り位置',
-  goal: '次に返ってくる球の最大角度を二等分する位置に戻ることで、オープンコートを最小化する。',
-  proReference: 'ジョコビッチが対戦相手分析で重視する基本中の基本。',
-  durationMs: 8000,
+  subtitle: 'ストレートに打った後の正しい戻り位置（二等分線）',
+  goal: '相手が返せる最大角度を二等分する位置に戻り、オープンコートを最小化する。',
+  proReference: 'ジョコビッチの基本ポジショニング。',
   rightHandedAssumption: true,
-  ballPath: [
-    { tMs: 0,    pos: [0, 0.5, -10.5] },         // 自分のベースライン中央
-    { tMs: 1200, pos: [-3.5, 1.5, 0] },          // ネット上
-    { tMs: 2400, pos: [-3.5, 0.0, 9.5] },        // 相手バック深く着弾
-    { tMs: 3000, pos: [-3.5, 1.2, 6] },          // 相手が拾う
-    { tMs: 4500, pos: [-1.5, 1.5, 0] },          // ネット上（クロス気味）
-    { tMs: 6000, pos: [2.5, 0.0, -9.5] },        // 自分側オープンコート
-  ],
+  visionConesOf: 'ALL',
+  pressureRange: { startMs: 2600, endMs: 5200 },
+  introBeat: '相手バック奥にストレートで深く打ちます。',
   players: [
-    {
-      id: 'you', label: 'あなた', side: 'NEAR', color: '#4CAF50', role: 'YOU',
-      keyframes: [
-        { tMs: 0,    pos: [0, -10.5], facing: 0 },
-        { tMs: 1200, pos: [0, -10.5] },
-        { tMs: 2400, pos: [-1.5, -10.0] },       // 「悪い戻り」：中央に戻ろうとする
-        { tMs: 3800, pos: [-1.5, -10.0] },       // 待機
-        { tMs: 4500, pos: [-1.5, -10.0] },
-        { tMs: 6000, pos: [1.0, -10.5] },        // ↑ 間に合わずオープンコート許す
-      ],
-    },
-    {
-      id: 'opp', label: '相手', side: 'FAR', color: '#EF5350', role: 'OPP1',
-      keyframes: [
-        { tMs: 0,    pos: [0, 10.5], facing: Math.PI },
-        { tMs: 2400, pos: [-3.5, 9.0] },         // バック深く拾いに
-        { tMs: 3000, pos: [-3.5, 9.0] },
-        { tMs: 4500, pos: [-2.5, 8.5] },
-        { tMs: 6000, pos: [-2.5, 8.5] },
-      ],
-    },
+    { role: 'YOU', label: 'あなた', side: 'NEAR', color: GREEN, home: [-1, -10.5] },
+    { role: 'OPP1', label: '相手', side: 'FAR', color: RED, home: [0, 10.5] },
   ],
-  dangerZones: [
-    // 自分の戻りが甘いと、相手のクロス展開で右側にオープンコート
-    { tMs: 2400, center: [0, 0], radius: 0, visible: false },
-    { tMs: 3000, center: [2.5, -8], radius: 2.8, visible: true },
-    { tMs: 5500, center: [2.5, -8], radius: 3.5, visible: true },
-    { tMs: 6500, center: [2.5, -8], radius: 0.5, visible: false },
+  contacts: [
+    { tMs: 0, hitter: 'YOU', pos: [-1, 1.0, -10.5], bounce: [-3.4, 0, 9.2], bounceTMs: 1300,
+      gateLabel: '深くストレート', showGate: true },
+    { tMs: 2300, hitter: 'OPP1', pos: [-3.4, 1.0, 9.4], bounce: [2.6, 0, -9.0], bounceTMs: 3700,
+      beat: '⚠️ センターに戻ると、相手のクロス展開で右オープンコートを突かれます。正解は二等分線上（やや左）。',
+      beatEmphasized: true, danger: { center: [2.8, -8.5], radius: 3.0 } },
   ],
-  beats: [
-    { tMs: 0,    text: '相手バック奥にストレートで深く打ちます。', emphasized: false },
-    { tMs: 2400, text: '⚠️ センターに戻るのは罠！相手のクロス展開で右オープンコートを狙われます。', emphasized: true },
-    { tMs: 4000, text: '正しくは「二等分線」上、コートやや左に戻るのが正解。', emphasized: true },
-    { tMs: 6000, text: '結果：間に合わずウィナーを許してしまった例です。', emphasized: false },
+  endTMs: 6500,
+  extraMoves: [
+    // YOU が「正解の二等分線」へ戻る動き
+    { role: 'YOU', tMs: 2400, pos: [-1.2, -10.2] },
+    { role: 'YOU', tMs: 3600, pos: [-1.6, -10.2] },
   ],
 }
 
-// ── シングルス：クロス→ストレート展開 ──
-const singlesCrossDtl: Scenario = {
-  visionConesOf: 'ALL',
-  targetGates: [
-    { tMs: 0,    pos: [-3.5, 1.0, 8], normal: [0, 0, -1], radius: 0.8, visible: true, label: 'クロス1' },
-    { tMs: 3300, pos: [-4, 1.0, 8], normal: [0, 0, -1], radius: 0.8, visible: true, label: 'クロス2' },
-    { tMs: 6400, pos: [-4.5, 1.0, 9], normal: [0, 0, -1], radius: 0.8, visible: true, label: 'クロス3' },
-    { tMs: 9500, pos: [3.5, 1.0, 9], normal: [0, 0, -1], radius: 1.2, visible: true, label: '🎯 ストレート！' },
-    { tMs: 11500, pos: [3.5, 1.0, 9], normal: [0, 0, -1], radius: 0.5, visible: false },
-  ],
+// ── クロス3球→ダウンザライン（バグ修正版） ──
+const singlesCrossDtl: RallyDef = {
   id: 'singles_cross_dtl',
   category: 'SINGLES_PATTERN',
   title: 'クロス3球→ダウンザライン',
   subtitle: 'クロスで揺さぶり、相手のスタンスが流れた瞬間に逆を突く',
   goal: '相手を片側に追い出してから空いた逆サイドを取る、最も基本かつ効果的なパターン。',
   proReference: 'ナダル／ティームの王道。',
-  durationMs: 12000,
-  ballPath: [
-    { tMs: 0,    pos: [-1, 0.5, -10] },
-    { tMs: 1200, pos: [-2, 1.5, 0] },
-    { tMs: 2400, pos: [-3.5, 0, 8] },           // クロス1
-    { tMs: 3300, pos: [-1.5, 1.2, 4] },
-    { tMs: 4400, pos: [-2.5, 1.5, 0] },
-    { tMs: 5500, pos: [-4, 0, 8] },             // クロス2
-    { tMs: 6400, pos: [-2, 1.2, 4] },
-    { tMs: 7500, pos: [-3, 1.5, 0] },
-    { tMs: 8600, pos: [-4.5, 0, 9] },           // クロス3（相手は完全に左へ）
-    { tMs: 9500, pos: [-2, 1.2, 5] },
-    { tMs: 10500, pos: [2.5, 1.5, 0] },          // ストレート転換！
-    { tMs: 11500, pos: [3.5, 0, 9.5] },          // ウィナー
-  ],
+  rightHandedAssumption: true,
+  visionConesOf: 'ALL',
+  introBeat: 'クロスラリー開始。相手を左に追い出す準備。',
   players: [
-    {
-      id: 'you', label: 'あなた', side: 'NEAR', color: '#4CAF50', role: 'YOU',
-      keyframes: [
-        { tMs: 0,     pos: [-1, -10] },
-        { tMs: 2400,  pos: [-1, -10] },
-        { tMs: 4400,  pos: [-1.5, -10] },
-        { tMs: 7500,  pos: [-2, -10] },
-        { tMs: 10500, pos: [-2.5, -10] },
-        { tMs: 12000, pos: [-1, -10] },
-      ],
-    },
-    {
-      id: 'opp', label: '相手', side: 'FAR', color: '#EF5350', role: 'OPP1',
-      keyframes: [
-        { tMs: 0,     pos: [0, 10] },
-        { tMs: 2400,  pos: [-3, 9.5] },
-        { tMs: 5500,  pos: [-4, 9] },
-        { tMs: 8600,  pos: [-4.5, 9] },        // 完全に左に流れる
-        { tMs: 10500, pos: [-3.5, 9] },         // 戻り始めるが…
-        { tMs: 11500, pos: [-1, 9] },           // 追いつかない
-      ],
-    },
+    { role: 'YOU', label: 'あなた', side: 'NEAR', color: GREEN, home: [-1, -10.5] },
+    { role: 'OPP1', label: '相手', side: 'FAR', color: RED, home: [0, 10.5] },
   ],
-  dangerZones: [
-    { tMs: 0,     center: [0, 0], radius: 0, visible: false },
-    { tMs: 5500,  center: [3, 9], radius: 2.5, visible: true },   // 相手側オープンコート出現
-    { tMs: 8600,  center: [3.5, 9.5], radius: 3.5, visible: true }, // さらに広がる
-    { tMs: 11500, center: [3.5, 9.5], radius: 0.5, visible: false },
+  contacts: [
+    { tMs: 0,     hitter: 'YOU',  pos: [-1, 1.0, -10.5], bounce: [-3.2, 0, 8.6], bounceTMs: 1300,
+      beat: 'クロス1球目：深く厳しく' },
+    { tMs: 2100,  hitter: 'OPP1', pos: [-3.2, 1.0, 9.0], bounce: [-1.8, 0, -8.5], bounceTMs: 3300 },
+    { tMs: 4000,  hitter: 'YOU',  pos: [-1.8, 1.0, -9.5], bounce: [-3.9, 0, 8.6], bounceTMs: 5300,
+      beat: 'クロス2球目：相手の重心が左に流れる' },
+    { tMs: 6000,  hitter: 'OPP1', pos: [-3.9, 1.0, 9.0], bounce: [-2.2, 0, -8.5], bounceTMs: 7100 },
+    { tMs: 7800,  hitter: 'YOU',  pos: [-2.2, 1.0, -9.5], bounce: [-4.5, 0, 9.0], bounceTMs: 9000,
+      beat: 'クロス3球目：相手は完全に左寄り。逆サイドが大きく空く！', beatEmphasized: true,
+      danger: { center: [3.0, 8.6], radius: 3.2 } },
+    { tMs: 9600,  hitter: 'OPP1', pos: [-4.5, 1.0, 9.3], bounce: [-1.8, 0, -6.5], bounceTMs: 10600 },
+    { tMs: 11100, hitter: 'YOU',  pos: [-1.8, 1.0, -6.5], bounce: [3.6, 0, 9.3], bounceTMs: 12300,
+      beat: '🎯 今だ！ストレートに展開してウィナー！', beatEmphasized: true,
+      gateLabel: '🎯 ストレート！', showGate: true, danger: { center: [3.6, 9.0], radius: 2.0 } },
   ],
-  beats: [
-    { tMs: 0,     text: 'クロスラリー開始。相手を左に追い出す準備。' },
-    { tMs: 2400,  text: 'クロス1球目：深く厳しく' },
-    { tMs: 5500,  text: 'クロス2球目：相手の重心が左に流れる' },
-    { tMs: 8600,  text: 'クロス3球目：相手は完全に左寄り。逆サイドが大きく空く！', emphasized: true },
-    { tMs: 10500, text: '🎯 今だ！ストレートに展開してウィナー！', emphasized: true },
+  endTMs: 13500,
+  extraMoves: [
+    { role: 'OPP1', tMs: 11600, pos: [-2.0, 9.5] },   // 戻ろうとするが間に合わない
   ],
 }
 
-// ── ダブルス：雁行陣のポーチタイミング ──
-const doublesPoachTiming: Scenario = {
-  id: 'doubles_poach_timing',
+// ── サーブ：ワイド→オープンコート ──
+const singlesServeWide: RallyDef = {
+  id: 'singles_serve_wide',
+  category: 'SINGLES_SERVE',
+  title: 'ワイドサーブ → オープンコート',
+  subtitle: 'ワイドで相手を外へ追い出し、空いた逆側を 3 球目で仕留める',
+  goal: 'サーブで角度を作り、リターンが浅くなった瞬間にオープンコートを突く。',
+  proReference: 'フェデラーの「サーブ＋1」基本パターン。',
+  rightHandedAssumption: true,
+  visionConesOf: 'ALL',
+  introBeat: 'デュースサイドからワイドサーブを準備。',
+  players: [
+    { role: 'YOU', label: 'あなた', side: 'NEAR', color: GREEN, home: [-1.5, -10.5] },
+    { role: 'OPP1', label: '相手', side: 'FAR', color: RED, home: [2.5, 10.5] },
+  ],
+  contacts: [
+    { tMs: 0,    hitter: 'YOU',  pos: [-1.5, 1.6, -10.5], bounce: [3.8, 0, 5.6], bounceTMs: 900, apex: 0.3,
+      beat: 'ワイドサーブで相手をコート外へ！', gateLabel: 'ワイドへ', showGate: true,
+      danger: { center: [-3.5, 8.5], radius: 3.0 } },
+    { tMs: 1700, hitter: 'OPP1', pos: [4.4, 1.0, 6.2], bounce: [0.5, 0, -7.5], bounceTMs: 2800,
+      beat: '相手は外に出され、リターンが浅い…' },
+    { tMs: 3500, hitter: 'YOU',  pos: [0.5, 1.0, -7.5], bounce: [-3.8, 0, 9.0], bounceTMs: 4700,
+      beat: '🎯 空いた逆サイド（バック奥）へ叩き込む！', beatEmphasized: true,
+      gateLabel: '🎯 オープンコート', showGate: true, danger: { center: [-3.8, 9.0], radius: 2.2 } },
+  ],
+  endTMs: 6200,
+  extraMoves: [
+    { role: 'OPP1', tMs: 3000, pos: [4.6, 10.0] },  // 外に出たまま戻れない
+  ],
+}
+
+// ── サーブ：T センター → ボディ攻め ──
+const singlesServeT: RallyDef = {
+  id: 'singles_serve_t',
+  category: 'SINGLES_SERVE',
+  title: 'T センターサーブ → ボディ攻め',
+  subtitle: 'センターで角度を消し、続けてボディに詰めて崩す',
+  goal: '角度のないセンターサーブでリターンを限定し、懐を突いて主導権を握る。',
+  rightHandedAssumption: true,
+  visionConesOf: 'ALL',
+  introBeat: 'デュースサイドから T（センター）へサーブ。',
+  players: [
+    { role: 'YOU', label: 'あなた', side: 'NEAR', color: GREEN, home: [-1.5, -10.5] },
+    { role: 'OPP1', label: '相手', side: 'FAR', color: RED, home: [2.8, 10.5] },
+  ],
+  contacts: [
+    { tMs: 0,    hitter: 'YOU',  pos: [-1.5, 1.6, -10.5], bounce: [0.4, 0, 5.8], bounceTMs: 900, apex: 0.3,
+      beat: 'T へサーブ。相手は角度を作れない。', gateLabel: 'T センター', showGate: true },
+    { tMs: 1700, hitter: 'OPP1', pos: [0.8, 1.0, 7.0], bounce: [-1.0, 0, -7.0], bounceTMs: 2800 },
+    { tMs: 3500, hitter: 'YOU',  pos: [-1.0, 1.0, -7.5], bounce: [1.2, 0, 8.5], bounceTMs: 4700,
+      beat: '🎯 相手のボディ（懐）に詰めて窮屈にさせる！', beatEmphasized: true,
+      gateLabel: '🎯 ボディへ', showGate: true, danger: { center: [1.2, 8.5], radius: 1.8 } },
+  ],
+  endTMs: 6200,
+}
+
+// ── リターン：2nd を叩いて先手 ──
+const singlesReturnAttack: RallyDef = {
+  id: 'singles_return_attack',
+  category: 'SINGLES_RETURN',
+  title: 'セカンドサーブを叩いて先手',
+  subtitle: '甘い 2nd を 1〜2 歩前で捉え、ライジングで深く返す',
+  goal: '2nd サーブを前で叩いてベースラインの主導権を最初の一打で奪う。',
+  proReference: 'ジョコビッチのアグレッシブリターン。',
+  rightHandedAssumption: true,
+  visionConesOf: 'ALL',
+  introBeat: '相手の 2nd サーブ。1〜2 歩前で構える。',
+  players: [
+    { role: 'OPP1', label: '相手（サーバー）', side: 'FAR', color: RED, home: [1.5, 10.5] },
+    { role: 'YOU', label: 'あなた（リターナー）', side: 'NEAR', color: GREEN, home: [-2.5, -9.0] },
+  ],
+  contacts: [
+    { tMs: 0,    hitter: 'OPP1', pos: [1.5, 1.5, 10.5], bounce: [-2.5, 0, -5.5], bounceTMs: 1100, apex: 0.4,
+      beat: '2nd サーブはバウンドが高く甘い。' },
+    { tMs: 2000, hitter: 'YOU',  pos: [-2.5, 1.1, -5.0], bounce: [-3.5, 0, 9.2], bounceTMs: 3200,
+      beat: '🎯 ライジングで叩いて深く！すぐ前進して主導権。', beatEmphasized: true,
+      gateLabel: '🎯 深く叩く', showGate: true, danger: { center: [-3.5, 9.2], radius: 2.2 } },
+    { tMs: 4200, hitter: 'OPP1', pos: [-3.5, 1.0, 9.3], bounce: [2.0, 0, -7.0], bounceTMs: 5400 },
+    { tMs: 6000, hitter: 'YOU',  pos: [2.0, 1.0, -7.0], bounce: [3.5, 0, 9.0], bounceTMs: 7100,
+      beat: '前で捌いてオープンコートへ。', gateLabel: 'フィニッシュ', showGate: true,
+      danger: { center: [3.5, 9.0], radius: 1.8 } },
+  ],
+  endTMs: 8400,
+  extraMoves: [
+    { role: 'YOU', tMs: 3400, pos: [-1.5, -8.0] },  // リターン後に前進
+  ],
+}
+
+// ── 守備：ムーンボールで立て直し ──
+const singlesMoonball: RallyDef = {
+  id: 'singles_moonball',
+  category: 'SINGLES_DEFENSE',
+  title: 'ムーンボールで立て直し',
+  subtitle: '押されている時、高く深い球で時間を作りポジションを戻す',
+  goal: '劣勢の局面で高い軌道の深い球を使い、相手のリズムを崩して体勢を立て直す。',
+  proReference: 'マレーがピンチで使う切り替え。',
+  visionConesOf: 'ALL',
+  introBeat: '相手に攻め込まれ、コート外に追い出されている。',
+  players: [
+    { role: 'YOU', label: 'あなた', side: 'NEAR', color: GREEN, home: [-4.0, -10.0] },
+    { role: 'OPP1', label: '相手', side: 'FAR', color: RED, home: [0, 9.0] },
+  ],
+  contacts: [
+    { tMs: 0,    hitter: 'OPP1', pos: [0, 1.0, 9.0], bounce: [-4.0, 0, -9.5], bounceTMs: 1200,
+      beat: '相手の鋭い一打。あなたは大きく振られている。' },
+    { tMs: 2000, hitter: 'YOU',  pos: [-4.2, 1.0, -9.8], bounce: [0, 0, 9.5], bounceTMs: 3800, apex: 3.0,
+      beat: '☁️ ここで高く深いムーンボール！相手を後ろに下げて時間を稼ぐ。', beatEmphasized: true,
+      gateLabel: '☁️ 高く深く', showGate: true },
+    { tMs: 4600, hitter: 'OPP1', pos: [0, 1.4, 10.5], bounce: [-1.0, 0, -7.0], bounceTMs: 5800 },
+    { tMs: 6400, hitter: 'YOU',  pos: [-1.0, 1.0, -8.0], bounce: [2.0, 0, 8.0], bounceTMs: 7500,
+      beat: '体勢を戻せた。ここからニュートラルに戻す。' },
+  ],
+  endTMs: 8800,
+  extraMoves: [
+    { role: 'YOU', tMs: 3900, pos: [-1.5, -9.5] },   // ムーンボール後に中央へ復帰
+  ],
+}
+
+// ── ドロップ → ロブ ──
+const singlesDropLob: RallyDef = {
+  id: 'singles_drop_lob',
+  category: 'SINGLES_PATTERN',
+  title: 'ドロップ → 追い越しロブ',
+  subtitle: '前後に大きく揺さぶり、体力と集中を削る',
+  goal: 'ドロップで前に走らせ、止まったところをロブで頭上を抜く。',
+  proReference: 'アルカラスの代名詞コンボ。',
+  rightHandedAssumption: true,
+  visionConesOf: 'ALL',
+  introBeat: '深いラリーで「下がる」印象を作っておく。',
+  players: [
+    { role: 'YOU', label: 'あなた', side: 'NEAR', color: GREEN, home: [-1, -10.0] },
+    { role: 'OPP1', label: '相手', side: 'FAR', color: RED, home: [0, 10.5] },
+  ],
+  contacts: [
+    { tMs: 0,    hitter: 'YOU',  pos: [-1, 1.0, -10.0], bounce: [-2.5, 0, 9.5], bounceTMs: 1300,
+      beat: 'まず深く打って相手を下げる。' },
+    { tMs: 2100, hitter: 'OPP1', pos: [-2.5, 1.0, 10.0], bounce: [-1.5, 0, -8.5], bounceTMs: 3300 },
+    { tMs: 4000, hitter: 'YOU',  pos: [-1.5, 1.0, -8.5], bounce: [1.0, 0, 1.5], bounceTMs: 5000, apex: 0.2,
+      beat: '🎯 突然ドロップ！ネット際に落とす。', beatEmphasized: true,
+      gateLabel: '🎯 ドロップ', showGate: true, danger: { center: [1.0, 1.5], radius: 1.5 } },
+    { tMs: 5800, hitter: 'OPP1', pos: [1.0, 0.7, 1.8], bounce: [0.5, 0, -3.0], bounceTMs: 6700,
+      beat: '相手は全力ダッシュでなんとか触る。' },
+    { tMs: 7400, hitter: 'YOU',  pos: [0.5, 1.0, -4.0], bounce: [-1.0, 0, 10.5], bounceTMs: 9000, apex: 2.2,
+      beat: '☁️ 止まった相手の頭上をロブで抜く！', beatEmphasized: true,
+      gateLabel: '☁️ ロブで抜く', showGate: true, danger: { center: [-1.0, 10.5], radius: 2.0 } },
+  ],
+  endTMs: 10500,
+  extraMoves: [
+    { role: 'OPP1', tMs: 4800, pos: [0.8, 3.0] },   // ドロップに前へダッシュ
+    { role: 'OPP1', tMs: 6700, pos: [0.8, 2.0] },   // 前に止まる→ロブで抜かれる
+  ],
+}
+
+// ════════════════════════════════════════════════════════════
+//  ダブルス
+// ════════════════════════════════════════════════════════════
+
+// ── 雁行陣：前衛ポーチのタイミング ──
+const doublesPoach: RallyDef = {
+  id: 'doubles_poach',
   category: 'DOUBLES_OPPOSITE',
   title: '雁行陣：前衛ポーチのタイミング',
-  subtitle: 'クロスラリー中、前衛がポーチに動く瞬間を完全可視化',
-  goal: '相手の3球目クロスを狙ってポーチに出る、ダブルスの基本攻撃。',
+  subtitle: 'クロスラリー中、前衛がポーチに動く瞬間とスイッチ',
+  goal: '相手の 3 球目クロスを狙ってポーチに出る、ダブルスの基本攻撃。',
   proReference: 'ブライアン兄弟の代名詞。',
-  durationMs: 9000,
-  ballPath: [
-    { tMs: 0,    pos: [-3, 0.5, -10] },       // 後衛サーブ後の構え
-    { tMs: 1500, pos: [-3, 1.5, 0] },         // クロスへ
-    { tMs: 2800, pos: [-3, 0.2, 7] },         // 相手側
-    { tMs: 4000, pos: [-3, 1.5, 0] },         // 相手リターン → クロス
-    { tMs: 5200, pos: [-2, 1.5, 0] },         // 後衛が打ち返す→
-    { tMs: 6300, pos: [3, 1.5, 0] },          // 前衛がポーチで横取り
-    { tMs: 7200, pos: [4, 0.2, 8] },          // 相手陣ウィナー
-  ],
+  visionConesOf: 'ALL',
+  introBeat: 'クロスラリー開始。前衛（あなた）は相手の打球方向を注視。',
   players: [
-    {
-      id: 'you', label: 'あなた（前衛）', side: 'NEAR', color: '#4CAF50', role: 'YOU',
-      keyframes: [
-        { tMs: 0,    pos: [-2.5, -5] },         // 前衛ポジション
-        { tMs: 3000, pos: [-2.5, -5] },
-        { tMs: 4500, pos: [-2, -4.5] },         // ポーチ準備
-        { tMs: 5800, pos: [0, -3] },            // ポーチで横切る！
-        { tMs: 6800, pos: [2, -2.5] },          // フォロースルー前進
-      ],
-    },
-    {
-      id: 'partner', label: 'パートナー（後衛）', side: 'NEAR', color: '#42A5F5', role: 'PARTNER',
-      keyframes: [
-        { tMs: 0,    pos: [-3, -10] },
-        { tMs: 1500, pos: [-3, -10] },
-        { tMs: 4000, pos: [-3, -10] },
-        { tMs: 6000, pos: [-3, -10] },          // ステイ
-        { tMs: 7000, pos: [3, -10] },           // スイッチ（ポーチ後はコート逆側へ）
-      ],
-    },
-    {
-      id: 'opp1', label: '相手（後衛）', side: 'FAR', color: '#EF5350', role: 'OPP1',
-      keyframes: [
-        { tMs: 0,    pos: [-3, 10] },
-        { tMs: 2800, pos: [-3, 9] },            // クロスを拾う
-        { tMs: 4500, pos: [-3, 10] },
-        { tMs: 6300, pos: [-2, 10] },           // ポーチで虚を突かれる
-      ],
-    },
-    {
-      id: 'opp2', label: '相手（前衛）', side: 'FAR', color: '#EF5350', role: 'OPP2',
-      keyframes: [
-        { tMs: 0,    pos: [3, 5] },
-        { tMs: 9000, pos: [3, 5] },             // ほぼ動かず
-      ],
-    },
+    { role: 'YOU', label: 'あなた（前衛）', side: 'NEAR', color: GREEN, home: [2.5, -5.0] },
+    { role: 'PARTNER', label: 'パートナー（後衛）', side: 'NEAR', color: BLUE, home: [-3.0, -10.0] },
+    { role: 'OPP1', label: '相手（後衛）', side: 'FAR', color: RED, home: [-3.0, 10.0] },
+    { role: 'OPP2', label: '相手（前衛）', side: 'FAR', color: RED, home: [3.0, 5.0] },
   ],
-  dangerZones: [
-    { tMs: 0,    center: [0, 0], radius: 0, visible: false },
-    { tMs: 4500, center: [0, 0], radius: 2, visible: true },        // センターが危険
-    { tMs: 5800, center: [0, -2], radius: 1.5, visible: false },     // ポーチ成功で消失
-    { tMs: 6500, center: [4, 8], radius: 2.5, visible: true },       // 相手のオープンに変化
+  contacts: [
+    { tMs: 0,    hitter: 'PARTNER', pos: [-3.0, 1.0, -10.0], bounce: [-3.2, 0, 8.5], bounceTMs: 1300,
+      beat: '後衛がクロスへ深く。' },
+    { tMs: 2100, hitter: 'OPP1', pos: [-3.2, 1.0, 9.0], bounce: [-3.0, 0, -8.5], bounceTMs: 3300 },
+    { tMs: 4100, hitter: 'PARTNER', pos: [-3.0, 1.0, -9.0], bounce: [-3.2, 0, 8.5], bounceTMs: 5300,
+      beat: '前衛は「次のクロス」を狙ってポーチ準備…', beatEmphasized: true,
+      danger: { center: [0, -2.0], radius: 1.6 } },
+    // 相手のクロス（ボレーで取られる＝バウンドなし）
+    { tMs: 6100, hitter: 'OPP1', pos: [-3.2, 1.0, 9.0],
+      beat: '相手がクロスに返した瞬間…' },
+    // 前衛がポーチでボレー
+    { tMs: 7000, hitter: 'YOU', pos: [0, 1.1, -1.5], bounce: [3.6, 0, 7.5], bounceTMs: 8000,
+      beat: '🔥 ポーチ！センターを横切って決める！', beatEmphasized: true,
+      gateLabel: '🔥 ポーチ', showGate: true, danger: { center: [3.6, 7.5], radius: 2.0 } },
   ],
-  beats: [
-    { tMs: 0,    text: 'クロスラリー開始。前衛は注視しながらスタンバイ。' },
-    { tMs: 3000, text: '前衛は相手後衛の打球方向を読む。' },
-    { tMs: 4500, text: '🔥 ポーチのチャンス！相手の3球目クロスを狙う', emphasized: true },
-    { tMs: 5800, text: '前衛がセンターを横切ってポーチ！', emphasized: true },
-    { tMs: 7000, text: '後衛は必ずスイッチで空いたサイドをカバー。' },
+  endTMs: 9500,
+  extraMoves: [
+    { role: 'YOU', tMs: 5800, pos: [1.5, -3.0] },   // ポーチへ動き出す
+    { role: 'YOU', tMs: 7600, pos: [3.0, -2.0] },   // 決めた後前進
+    { role: 'PARTNER', tMs: 7200, pos: [2.5, -10.0] },  // スイッチして空いたサイドをカバー
+    { role: 'OPP1', tMs: 7000, pos: [-2.0, 9.5] },  // ポーチに虚を突かれる
   ],
 }
 
-// ── ダブルス：並行陣ロブ対応とスイッチ ──
-const doublesParallelLob: Scenario = {
+// ── 並行陣：ロブ対応とスイッチ ──
+const doublesParallelLob: RallyDef = {
   id: 'doubles_parallel_lob',
   category: 'DOUBLES_PARALLEL',
   title: '並行陣：ロブ対応とスイッチ',
-  subtitle: '相手のロブに対し「どちらが追い、どちらがカバーするか」',
-  goal: 'ロブを上げられた瞬間の声出しと連動した役割交代（スイッチ）。',
-  durationMs: 8000,
-  ballPath: [
-    { tMs: 0,    pos: [-2, 1.5, 0] },           // ボレーラリー
-    { tMs: 800,  pos: [-2, 0.5, -2] },
-    { tMs: 1600, pos: [-2, 1.5, 0] },
-    { tMs: 2400, pos: [0, 5, 5] },              // 相手がロブ！
-    { tMs: 3600, pos: [2, 8, 0] },              // ロブが上がる
-    { tMs: 5000, pos: [3, 4, -7] },             // 自分側深くへ
-    { tMs: 6200, pos: [3, 1, -10] },            // 着弾
-    { tMs: 6800, pos: [3, 2, -5] },             // 拾い上げてロブで返球
-    { tMs: 8000, pos: [3, 5, 6] },
-  ],
+  subtitle: '相手のロブに「どちらが追い、どちらがカバーするか」',
+  goal: 'ロブを上げられた瞬間の声出しと、連動した役割交代（スイッチ）。',
+  visionConesOf: 'ALL',
+  introBeat: '並行陣でネットを支配中。',
   players: [
-    {
-      id: 'you', label: 'あなた（前衛右）', side: 'NEAR', color: '#4CAF50', role: 'YOU',
-      keyframes: [
-        { tMs: 0,    pos: [2.5, -5] },
-        { tMs: 2400, pos: [2.5, -5] },
-        { tMs: 3600, pos: [2.5, -5] },          // ロブが上がった瞬間
-        { tMs: 5500, pos: [3, -10] },           // 自分が追う（右側に来たため）
-        { tMs: 7000, pos: [3, -10] },
-      ],
-    },
-    {
-      id: 'partner', label: 'パートナー（前衛左）', side: 'NEAR', color: '#42A5F5', role: 'PARTNER',
-      keyframes: [
-        { tMs: 0,    pos: [-2.5, -5] },
-        { tMs: 3600, pos: [-2.5, -5] },
-        { tMs: 5500, pos: [-2.5, -3] },         // 前進してネット詰める
-        { tMs: 7000, pos: [-1, -2] },           // センターケア
-      ],
-    },
-    {
-      id: 'opp1', label: '相手（後衛）', side: 'FAR', color: '#EF5350', role: 'OPP1',
-      keyframes: [
-        { tMs: 0,    pos: [-3, 6] },
-        { tMs: 2400, pos: [-3, 6] },            // ロブを打つ
-        { tMs: 8000, pos: [-3, 6] },
-      ],
-    },
-    {
-      id: 'opp2', label: '相手（前衛）', side: 'FAR', color: '#EF5350', role: 'OPP2',
-      keyframes: [
-        { tMs: 0,    pos: [3, 5] },
-        { tMs: 8000, pos: [3, 5] },
-      ],
-    },
+    { role: 'YOU', label: 'あなた（前衛右）', side: 'NEAR', color: GREEN, home: [2.5, -4.5] },
+    { role: 'PARTNER', label: 'パートナー（前衛左）', side: 'NEAR', color: BLUE, home: [-2.5, -4.5] },
+    { role: 'OPP1', label: '相手（後衛）', side: 'FAR', color: RED, home: [-3.0, 9.0] },
+    { role: 'OPP2', label: '相手（前衛）', side: 'FAR', color: RED, home: [3.0, 5.0] },
   ],
-  dangerZones: [
-    { tMs: 2400, center: [3, -8], radius: 3, visible: true },       // ロブの落下予想
-    { tMs: 4500, center: [3, -10], radius: 2.5, visible: true },    // 着弾点
-    { tMs: 6800, center: [3, -10], radius: 1, visible: false },
+  contacts: [
+    { tMs: 0,    hitter: 'PARTNER', pos: [-2.5, 1.1, -4.5], bounce: [-3.0, 0, 6.0], bounceTMs: 900,
+      beat: 'ネット前のボレーラリー。' },
+    { tMs: 1800, hitter: 'OPP1', pos: [-3.0, 1.0, 6.5], bounce: [2.8, 0, -10.5], bounceTMs: 4000, apex: 2.6,
+      beat: '⚠️ ロブが上がる！「マイン！」と声を出して役割確認。', beatEmphasized: true,
+      danger: { center: [2.8, -10.0], radius: 2.8 } },
+    { tMs: 4900, hitter: 'YOU', pos: [2.8, 1.0, -10.5], bounce: [-1.0, 0, 9.0], bounceTMs: 6600, apex: 2.4,
+      beat: '右に上がったので右前衛（あなた）が追って高いロブで返球。', beatEmphasized: true,
+      gateLabel: '☁️ 高く返す', showGate: true },
   ],
-  beats: [
-    { tMs: 0,    text: '並行陣でネットラリー中。' },
-    { tMs: 2400, text: '⚠️ ロブが上がる！「マイン！」「ユアーズ！」と声を出して役割確認。', emphasized: true },
-    { tMs: 4000, text: '右側に上がったので右前衛（あなた）が追う。', emphasized: true },
-    { tMs: 5500, text: '同時に左前衛は前進してセンターケア＋ネット支配。' },
-    { tMs: 7000, text: '高いロブで時間を稼いで陣形再構築が無難。' },
+  endTMs: 8000,
+  extraMoves: [
+    { role: 'PARTNER', tMs: 4900, pos: [-1.5, -3.0] },  // 前進してセンターケア
+    { role: 'PARTNER', tMs: 6600, pos: [0, -2.5] },
+    { role: 'YOU', tMs: 6800, pos: [2.5, -8.0] },       // 追ったあと復帰
   ],
 }
 
-// ── ダブルス：I フォーメーション ──
-const doublesIFormation: Scenario = {
+// ── I フォーメーション ──
+const doublesIFormation: RallyDef = {
   id: 'doubles_i_formation',
   category: 'DOUBLES_I_FORMATION',
   title: 'I フォーメーション基本',
   subtitle: '前衛がセンターでサインを出し、サーブ直後に動く方向を予告',
-  goal: 'リターン側を惑わせ、ストレートリターンを牽制し、ポーチで先制。',
-  durationMs: 7000,
-  ballPath: [
-    { tMs: 0,    pos: [-1, 1.5, -9] },           // サーブ準備
-    { tMs: 1000, pos: [0, 2, -5] },              // トス
-    { tMs: 1500, pos: [-2, 1.5, 0] },            // サーブ通過
-    { tMs: 2500, pos: [-3.5, 0, 6] },            // T へキック
-    { tMs: 3300, pos: [-3, 1.5, 0] },            // リターン
-    { tMs: 4200, pos: [-2, 1.5, 0] },            // ポーチに前衛
-    { tMs: 5200, pos: [3, 0.2, 8] },             // ウィナー
-  ],
+  goal: 'リターン側を惑わせ、ストレートリターンを牽制してポーチで先制。',
+  visionConesOf: 'ALL',
+  introBeat: '前衛がセンターラインに低く構える（I 字）。',
   players: [
-    {
-      id: 'you', label: 'あなた（サーバー）', side: 'NEAR', color: '#4CAF50', role: 'YOU',
-      keyframes: [
-        { tMs: 0,    pos: [-1, -10] },
-        { tMs: 1500, pos: [-1, -10] },
-        { tMs: 2500, pos: [-3, -9] },            // サーブ後に左サイドへスイッチ
-        { tMs: 4200, pos: [-3, -7] },
-        { tMs: 5200, pos: [-3, -7] },
-      ],
-    },
-    {
-      id: 'partner', label: 'パートナー（I 前衛）', side: 'NEAR', color: '#42A5F5', role: 'PARTNER',
-      keyframes: [
-        { tMs: 0,    pos: [0, -5] },             // センターにしゃがむ
-        { tMs: 1500, pos: [0, -5] },
-        { tMs: 2500, pos: [0, -5] },             // サーブ通過まで動かず
-        { tMs: 3300, pos: [2, -4] },             // ↑ 右側にポーチ！
-        { tMs: 4200, pos: [3, -3] },
-      ],
-    },
-    {
-      id: 'opp1', label: '相手（リターナー）', side: 'FAR', color: '#EF5350', role: 'OPP1',
-      keyframes: [
-        { tMs: 0,    pos: [-3.5, 10] },
-        { tMs: 2500, pos: [-3.5, 9] },           // T サーブを拾う
-        { tMs: 3300, pos: [-3, 9.5] },
-      ],
-    },
-    {
-      id: 'opp2', label: '相手（前衛）', side: 'FAR', color: '#EF5350', role: 'OPP2',
-      keyframes: [
-        { tMs: 0,    pos: [3, 5] },
-        { tMs: 7000, pos: [3, 5] },
-      ],
-    },
+    { role: 'YOU', label: 'あなた（サーバー）', side: 'NEAR', color: GREEN, home: [-1.0, -10.5] },
+    { role: 'PARTNER', label: 'パートナー（I 前衛）', side: 'NEAR', color: BLUE, home: [0, -5.0] },
+    { role: 'OPP1', label: '相手（リターナー）', side: 'FAR', color: RED, home: [-3.5, 10.5] },
+    { role: 'OPP2', label: '相手（前衛）', side: 'FAR', color: RED, home: [3.0, 5.0] },
   ],
-  dangerZones: [
-    { tMs: 0,    center: [0, 0], radius: 0, visible: false },
-    { tMs: 3300, center: [-3, -3], radius: 2.5, visible: true },     // ストレートも警戒
-    { tMs: 4500, center: [3, 8], radius: 3, visible: true },         // ポーチ後のオープン
+  contacts: [
+    { tMs: 0,    hitter: 'YOU', pos: [-1.0, 1.6, -10.5], bounce: [-0.4, 0, 5.8], bounceTMs: 900, apex: 0.3,
+      beat: 'T センターへサーブ。前衛は右にポーチ予定。', gateLabel: 'T へ', showGate: true },
+    { tMs: 1700, hitter: 'OPP1', pos: [-0.8, 1.0, 7.0],
+      beat: 'リターナーは前衛の動きが読めず…', beatEmphasized: true },
+    { tMs: 2700, hitter: 'PARTNER', pos: [1.5, 1.1, -3.5], bounce: [3.6, 0, 8.0], bounceTMs: 3700,
+      beat: '🔥 前衛が右へポーチで横取り！', beatEmphasized: true,
+      gateLabel: '🔥 ポーチ', showGate: true, danger: { center: [3.6, 8.0], radius: 2.0 } },
   ],
-  beats: [
-    { tMs: 0,    text: '前衛がセンター低姿勢。サーバーは合意のサインで方向を共有。' },
-    { tMs: 2500, text: 'T センターへサーブ。前衛は右にポーチ予定。' },
-    { tMs: 3300, text: 'リターナーは前衛の動きが読めない！', emphasized: true },
-    { tMs: 4200, text: '🔥 前衛がポーチで横取り！', emphasized: true },
-    { tMs: 5200, text: 'サーバーは即座にスイッチで右側カバー。' },
+  endTMs: 5400,
+  extraMoves: [
+    { role: 'YOU', tMs: 2500, pos: [-3.0, -9.0] },   // サーブ後に左へスイッチ
+    { role: 'PARTNER', tMs: 1800, pos: [0.8, -4.0] }, // ポーチに動き出す
   ],
 }
 
-// ── ダブルス：対雁行陣の I 崩し ──
-const doublesAustralian: Scenario = {
+// ── オーストラリアン陣形 ──
+const doublesAustralian: RallyDef = {
   id: 'doubles_australian',
   category: 'DOUBLES_I_FORMATION',
   title: 'オーストラリアン陣形',
   subtitle: 'サーバーと前衛が同サイドに並んでクロスを封じる',
-  goal: '相手のクロスリターンが強烈な時に陣形を変えてストレートに振らせる。',
+  goal: '相手のクロスリターンが強い時、陣形を変えてストレートに振らせる。',
   proReference: '全豪オープンで多用される由来の戦術。',
-  durationMs: 6500,
-  ballPath: [
-    { tMs: 0,    pos: [-1, 1.5, -9] },
-    { tMs: 1000, pos: [0, 2, -5] },
-    { tMs: 1800, pos: [-2.5, 0, 6] },           // ワイドサーブ
-    { tMs: 2800, pos: [-2, 1.5, 0] },           // リターンはストレートしかない（並んでいるので）
-    { tMs: 3800, pos: [-2, 0.5, -5] },          // 前衛が反応
-    { tMs: 4800, pos: [3, 1.5, 0] },
-    { tMs: 5800, pos: [4, 0.2, 8] },
-  ],
+  visionConesOf: 'ALL',
+  introBeat: 'サーバーと前衛が同サイド（左）に並ぶ＝オーストラリアン陣形。',
   players: [
-    {
-      id: 'you', label: 'あなた（サーバー）', side: 'NEAR', color: '#4CAF50', role: 'YOU',
-      keyframes: [
-        { tMs: 0,    pos: [-1, -10] },
-        { tMs: 1800, pos: [-1, -10] },
-        { tMs: 2800, pos: [2.5, -9] },          // 一気に右側にスイッチ
-        { tMs: 4800, pos: [2.5, -7] },
-        { tMs: 5800, pos: [2.5, -5] },
-      ],
-    },
-    {
-      id: 'partner', label: 'パートナー', side: 'NEAR', color: '#42A5F5', role: 'PARTNER',
-      keyframes: [
-        { tMs: 0,    pos: [-2.5, -5] },          // ↑ 左前衛（同サイド）
-        { tMs: 2800, pos: [-2, -4] },            // ストレートを警戒
-        { tMs: 3800, pos: [-2, -3] },            // ボレー前進
-        { tMs: 4800, pos: [-1, -3] },
-      ],
-    },
-    {
-      id: 'opp1', label: '相手（リターナー）', side: 'FAR', color: '#EF5350', role: 'OPP1',
-      keyframes: [
-        { tMs: 0,    pos: [-3.5, 10] },
-        { tMs: 1800, pos: [-4, 9.5] },           // ワイドサーブを拾いに
-        { tMs: 6500, pos: [-3, 9.5] },
-      ],
-    },
-    {
-      id: 'opp2', label: '相手（前衛）', side: 'FAR', color: '#EF5350', role: 'OPP2',
-      keyframes: [
-        { tMs: 0,    pos: [3, 5] },
-        { tMs: 6500, pos: [3, 5] },
-      ],
-    },
+    { role: 'YOU', label: 'あなた（サーバー）', side: 'NEAR', color: GREEN, home: [-1.0, -10.5] },
+    { role: 'PARTNER', label: 'パートナー（前衛）', side: 'NEAR', color: BLUE, home: [-2.5, -5.0] },
+    { role: 'OPP1', label: '相手（リターナー）', side: 'FAR', color: RED, home: [-3.5, 10.5] },
+    { role: 'OPP2', label: '相手（前衛）', side: 'FAR', color: RED, home: [3.0, 5.0] },
   ],
-  dangerZones: [
-    { tMs: 0,    center: [4, -10], radius: 3, visible: true },       // 右が空いて見えるが…
-    { tMs: 2800, center: [-3, -3], radius: 2, visible: true },        // 実はストレートが罠
-    { tMs: 4500, center: [4, 8], radius: 2.5, visible: true },
+  contacts: [
+    { tMs: 0,    hitter: 'YOU', pos: [-1.0, 1.6, -10.5], bounce: [-3.6, 0, 5.6], bounceTMs: 900, apex: 0.3,
+      beat: 'ワイドサーブで相手リターナーを外へ。', gateLabel: 'ワイドへ', showGate: true },
+    { tMs: 1700, hitter: 'OPP1', pos: [-4.2, 1.0, 6.2],
+      beat: '⚠️ クロスは塞いだ。相手はストレートに打つしかない！', beatEmphasized: true,
+      danger: { center: [-2.5, -3.0], radius: 1.8 } },
+    { tMs: 2700, hitter: 'PARTNER', pos: [-2.0, 1.1, -3.5], bounce: [3.5, 0, 8.0], bounceTMs: 3700,
+      beat: '🔥 ストレートを前衛がボレーで仕留める！', beatEmphasized: true,
+      gateLabel: '🔥 ボレー', showGate: true, danger: { center: [3.5, 8.0], radius: 2.0 } },
   ],
-  beats: [
-    { tMs: 0,    text: 'サーバーと前衛が同サイド（左）に並ぶ＝オーストラリアン陣形。' },
-    { tMs: 1800, text: 'ワイドサーブで相手リターナーを大きく外へ。' },
-    { tMs: 2800, text: '⚠️ クロスは塞いだ。相手はストレートに打つしかない！', emphasized: true },
-    { tMs: 3800, text: 'ストレートを前衛がボレーで仕留める。' },
-    { tMs: 5800, text: 'サーバーは即座に右サイドへスイッチして陣形維持。' },
+  endTMs: 5400,
+  extraMoves: [
+    { role: 'YOU', tMs: 2500, pos: [2.5, -9.0] },   // サーブ後すぐ右へスイッチ
   ],
 }
 
-export const SCENARIOS: Scenario[] = [
-  singlesBisectStraight,
+// ── ダブルス・ネット：足元へ沈めてポーチ封じ ──
+const doublesNetDip: RallyDef = {
+  id: 'doubles_net_dip',
+  category: 'DOUBLES_NET',
+  title: 'リターンを足元に沈める',
+  subtitle: '相手前衛のポーチを防ぎ、ローボレーを上げさせて叩く',
+  goal: 'リターンを相手前衛／ネット選手の足元に低く沈め、浮いた球を仕留める。',
+  visionConesOf: 'ALL',
+  introBeat: '相手はネットに詰める並行陣。',
+  players: [
+    { role: 'OPP1', label: '相手（サーバー）', side: 'FAR', color: RED, home: [1.5, 10.5] },
+    { role: 'OPP2', label: '相手（前衛）', side: 'FAR', color: RED, home: [-2.5, 5.0] },
+    { role: 'YOU', label: 'あなた（リターナー）', side: 'NEAR', color: GREEN, home: [-2.5, -9.0] },
+    { role: 'PARTNER', label: 'パートナー', side: 'NEAR', color: BLUE, home: [2.5, -9.5] },
+  ],
+  contacts: [
+    { tMs: 0,    hitter: 'OPP1', pos: [1.5, 1.6, 10.5], bounce: [-2.6, 0, -5.6], bounceTMs: 900, apex: 0.3,
+      beat: '相手のサーブ。' },
+    { tMs: 1700, hitter: 'YOU', pos: [-2.6, 1.0, -5.6], bounce: [-2.5, 0, 4.5], bounceTMs: 2700, apex: 0.15,
+      beat: '🎯 相手前衛の足元へ低く沈める（トップスピン）。', beatEmphasized: true,
+      gateLabel: '🎯 足元へ', showGate: true, danger: { center: [-2.5, 4.5], radius: 1.4 } },
+    { tMs: 3300, hitter: 'OPP2', pos: [-2.5, 0.5, 4.8], bounce: [0, 0, -3.0], bounceTMs: 4200,
+      beat: '相手は低いローボレーを上げるしかない…' },
+    { tMs: 4900, hitter: 'PARTNER', pos: [0, 1.2, -3.5], bounce: [3.5, 0, 7.5], bounceTMs: 5800,
+      beat: '🔥 浮いた球をパートナーがパンチボレーで決める！', beatEmphasized: true,
+      gateLabel: '🔥 決める', showGate: true, danger: { center: [3.5, 7.5], radius: 2.0 } },
+  ],
+  endTMs: 7200,
+  extraMoves: [
+    { role: 'YOU', tMs: 2900, pos: [-1.5, -5.0] },   // リターン後に前進
+    { role: 'PARTNER', tMs: 3500, pos: [0.5, -5.5] }, // ネットに詰める
+  ],
+}
+
+// ════════════════════════════════════════════════════════════
+
+const RALLIES: RallyDef[] = [
+  singlesBisect,
   singlesCrossDtl,
-  doublesPoachTiming,
+  singlesServeWide,
+  singlesServeT,
+  singlesReturnAttack,
+  singlesMoonball,
+  singlesDropLob,
+  doublesPoach,
   doublesParallelLob,
   doublesIFormation,
   doublesAustralian,
+  doublesNetDip,
 ]
+
+export const SCENARIOS: Scenario[] = RALLIES.map(buildRally)
 
 /** カテゴリで絞り込み。 */
 export function scenariosByCategory(): Map<Scenario['category'], Scenario[]> {
@@ -442,20 +445,21 @@ export function scenariosByCategory(): Map<Scenario['category'], Scenario[]> {
 
 /** 利き手反転（左利き設定）。 */
 export function mirrorScenarioForLefty(s: Scenario): Scenario {
-  const flipX = <T extends [number, number] | [number, number, number]>(p: T): T => {
-    if (p.length === 3) return [-p[0], p[1], p[2]] as T
-    return [-p[0], p[1]] as T
-  }
+  const flip2 = (p: [number, number]): [number, number] => [-p[0], p[1]]
+  const flip3 = (p: [number, number, number]): [number, number, number] => [-p[0], p[1], p[2]]
   return {
     ...s,
-    ballPath: s.ballPath.map(k => ({ ...k, pos: flipX(k.pos) })),
+    ballPath: s.ballPath.map(k => ({ ...k, pos: flip3(k.pos) })),
     players: s.players.map(p => ({
       ...p,
       keyframes: p.keyframes.map(k => ({
-        ...k, pos: flipX(k.pos),
+        ...k, pos: flip2(k.pos),
         facing: k.facing !== undefined ? -k.facing : undefined,
       })),
     })),
-    dangerZones: s.dangerZones.map(d => ({ ...d, center: flipX(d.center) })),
+    dangerZones: s.dangerZones.map(d => ({ ...d, center: flip2(d.center) })),
+    targetGates: s.targetGates?.map(g => ({
+      ...g, pos: flip3(g.pos), normal: flip3(g.normal),
+    })),
   }
 }
