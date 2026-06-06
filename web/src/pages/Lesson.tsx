@@ -1,12 +1,29 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { detectVideoFrame, PoseFrame, warmupPoseModel } from '../lib/poseDetector'
+import {
+  detectVideoFrame, PoseFrame, warmupPoseModel, resetSmoothing,
+  setPoseQuality, PoseQuality,
+} from '../lib/poseDetector'
 import { SkeletonOverlay } from '../components/SkeletonOverlay'
 import { Shot, SHOT_EMOJI, SHOT_LABEL } from '../data/idealForms'
 import { analyzeSession } from '../lib/coachingFeedback'
 import { saveLessonReport } from '../lib/db'
 import type { LessonReport, SavedFrame } from '../types/lesson'
 import { KEY_LANDMARKS } from '../types/lesson'
+
+/** MediaRecorder で使える最適な MIME を選ぶ。 */
+function pickVideoMime(): string {
+  const candidates = [
+    'video/mp4;codecs=avc1',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ]
+  for (const c of candidates) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c)) return c
+  }
+  return ''
+}
 
 type Source = 'LIVE' | 'UPLOAD'
 type Phase =
@@ -44,16 +61,24 @@ export function LessonPage() {
   const recordStartRef = useRef(0)
   const lastTsRef = useRef(0)
 
+  // MediaRecorder（撮影しながら実映像も保存）
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const recordedChunksRef = useRef<Blob[]>([])
+  const recordedBlobRef = useRef<{ blob: Blob; mime: string } | null>(null)
+  const [pendingQuality, setPendingQuality] = useState<PoseQuality>('HIGH')
+
   // ── モデルウォームアップ（カメラ／アップロード両モードで必要） ──
   useEffect(() => {
     const needsModel =
       phase === 'CAMERA_SETUP' || phase === 'RECORDING' ||
       phase === 'UPLOAD_PICK' || phase === 'UPLOAD_PROCESSING'
     if (!needsModel) return
+    setPoseQuality(pendingQuality)
+    setModelReady(false)
     warmupPoseModel().then(() => setModelReady(true)).catch(e => {
       setError('AI モデルのロードに失敗しました：' + (e?.message ?? String(e)))
     })
-  }, [phase])
+  }, [phase, pendingQuality])
 
   // ── カメラ起動（ライブモードのみ） ──
   useEffect(() => {
@@ -83,6 +108,10 @@ export function LessonPage() {
   useEffect(() => () => {
     cancelRef.current = true
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    const mr = mediaRecorderRef.current
+    if (mr && mr.state !== 'inactive') {
+      try { mr.stop() } catch { /* noop */ }
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop())
       streamRef.current = null
@@ -136,12 +165,53 @@ export function LessonPage() {
   // ── ライブ録画 開始／停止 ──
   const startRecording = () => {
     framesRef.current = []
+    recordedChunksRef.current = []
+    recordedBlobRef.current = null
     recordStartRef.current = Date.now()
+    resetSmoothing()    // 録画開始時にスムージング履歴をクリア
     setElapsed(0)
     setRecording(true)
+
+    // MediaRecorder で実映像を同時録画（撮影しながら解析）
+    const stream = streamRef.current
+    if (stream && typeof MediaRecorder !== 'undefined') {
+      const mime = pickVideoMime()
+      try {
+        const mr = mime
+          ? new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 4_000_000 })
+          : new MediaRecorder(stream)
+        mr.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data)
+        }
+        mr.onstop = () => {
+          const actualMime = mr.mimeType || mime || 'video/webm'
+          const blob = new Blob(recordedChunksRef.current, { type: actualMime })
+          recordedBlobRef.current = { blob, mime: actualMime }
+        }
+        mr.start(250)   // 250ms ごとに chunk 取得
+        mediaRecorderRef.current = mr
+      } catch {
+        // MediaRecorder 非対応でも解析は続行（映像保存だけスキップ）
+        mediaRecorderRef.current = null
+      }
+    }
   }
+
   const stopRecordingAndAnalyze = async () => {
     setRecording(false)
+    // MediaRecorder 停止 → blob 確定を待つ
+    const mr = mediaRecorderRef.current
+    if (mr && mr.state !== 'inactive') {
+      await new Promise<void>((resolve) => {
+        const prev = mr.onstop
+        mr.onstop = (ev) => {
+          if (typeof prev === 'function') (prev as any).call(mr, ev)
+          resolve()
+        }
+        mr.stop()
+      })
+      mediaRecorderRef.current = null
+    }
     await runAnalysisAndSave(elapsed)
   }
 
@@ -259,6 +329,7 @@ export function LessonPage() {
       setAnalysisProgress(80)
       const saved: SavedFrame[] = compressFrames(frames, 240)
       const lessonId = randomId()
+      const recorded = recordedBlobRef.current
       const report: LessonReport = {
         lessonId,
         shot,
@@ -271,9 +342,12 @@ export function LessonPage() {
         drills: analysis.drills,
         impactPoints: analysis.impactPoints,
         frames: saved,
+        videoBlob: recorded?.blob,
+        videoMime: recorded?.mime,
         createdAt: Date.now(),
       }
       await saveLessonReport(report)
+      recordedBlobRef.current = null
       setAnalysisProgress(100)
       nav(`/lesson/${lessonId}`, { replace: true })
     } catch (e: any) {
@@ -326,6 +400,8 @@ export function LessonPage() {
           recording={recording}
           elapsed={elapsed}
           framesCount={framesRef.current.length}
+          quality={pendingQuality}
+          onQualityChange={setPendingQuality}
           onStart={startRecording}
           onStop={stopRecordingAndAnalyze}
         />
@@ -432,7 +508,7 @@ function SourceSelector({ onLive, onUpload }: {
         <div className="flex-1">
           <div className="font-bold">ライブカメラで撮影</div>
           <div className="text-xs text-gray-400">
-            その場で動画を撮影しながらリアルタイムに解析
+            撮影しながらリアルタイム解析＋実映像も保存（後で見返せる）
           </div>
         </div>
         <span className="text-gray-500">›</span>
@@ -456,16 +532,22 @@ function SourceSelector({ onLive, onUpload }: {
   )
 }
 
-function CameraPanel({ videoRef, previewLm, modelReady, recording, elapsed, framesCount, onStart, onStop }: {
+function CameraPanel({
+  videoRef, previewLm, modelReady, recording, elapsed, framesCount,
+  quality, onQualityChange, onStart, onStop,
+}: {
   videoRef: React.RefObject<HTMLVideoElement>;
   previewLm: PoseFrame | null;
   modelReady: boolean;
   recording: boolean;
   elapsed: number;
   framesCount: number;
+  quality: PoseQuality;
+  onQualityChange: (q: PoseQuality) => void;
   onStart: () => void;
   onStop: () => void;
 }) {
+  const detected = !!previewLm?.landmarks
   return (
     <div className="space-y-3">
       <div className="relative bg-black rounded-xl overflow-hidden aspect-video">
@@ -477,31 +559,65 @@ function CameraPanel({ videoRef, previewLm, modelReady, recording, elapsed, fram
         {recording && (
           <div className="absolute top-2 left-2 bg-black/60 rounded px-2 py-1 flex items-center gap-1">
             <span className="w-2 h-2 bg-court-danger rounded-full animate-pulse" />
-            <span className="text-court-danger text-xs font-bold">REC {elapsed}s</span>
+            <span className="text-court-danger text-xs font-bold">● REC {elapsed}s ・ 解析中</span>
           </div>
         )}
+        {/* 検知状態を常時表示 */}
+        <div className="absolute top-2 right-2 bg-black/60 rounded px-2 py-1">
+          <span className={`text-xs font-bold ${detected ? 'text-court-accent' : 'text-gray-400'}`}>
+            {detected ? '骨格検知中 ✓' : '骨格を探しています…'}
+          </span>
+        </div>
         {!modelReady && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/70">
             <div className="text-center">
               <div className="animate-spin text-4xl">⚙️</div>
-              <div className="text-xs text-gray-300 mt-2">AI モデルをロード中...</div>
+              <div className="text-xs text-gray-300 mt-2">
+                AI モデルをロード中...{quality === 'HIGH' ? '（高精度）' : '（高速）'}
+              </div>
             </div>
           </div>
         )}
       </div>
 
+      {/* 精度モード切替（録画前のみ） */}
+      {!recording && (
+        <div className="bg-court-card rounded-xl p-3">
+          <div className="text-xs text-gray-400 mb-2">骨格検知の精度</div>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => onQualityChange('HIGH')}
+              className={`py-2 rounded text-sm font-bold ${
+                quality === 'HIGH' ? 'bg-court-accent text-white' : 'bg-court-surface text-gray-300'
+              }`}>
+              🎯 高精度
+            </button>
+            <button onClick={() => onQualityChange('FAST')}
+              className={`py-2 rounded text-sm font-bold ${
+                quality === 'FAST' ? 'bg-court-info text-white' : 'bg-court-surface text-gray-300'
+              }`}>
+              ⚡ 高速
+            </button>
+          </div>
+          <div className="text-xs text-gray-500 mt-2">
+            {quality === 'HIGH'
+              ? '高精度モデル（full）＋ジッタ抑制。新しめの端末向け。'
+              : '軽量モデル（lite）。動作が重い端末はこちら。'}
+          </div>
+        </div>
+      )}
+
       {recording && (
         <div className="bg-court-card rounded-xl p-3 grid grid-cols-3 text-center">
           <Stat label="経過" value={`${elapsed}秒`} />
           <Stat label="フレーム" value={`${framesCount}`} />
-          <Stat label="検知" value={previewLm?.landmarks ? '✓' : '—'} />
+          <Stat label="検知" value={detected ? '✓' : '—'} />
         </div>
       )}
 
       {!recording ? (
         <button onClick={onStart} disabled={!modelReady}
           className="w-full bg-green-700 disabled:bg-gray-700 text-white font-bold py-3 rounded-xl active:scale-95 transition">
-          ⏺ 録画開始（スイングを繰り返してください）
+          ⏺ 録画開始（撮影しながら解析します）
         </button>
       ) : (
         <button onClick={onStop}

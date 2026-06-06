@@ -24,6 +24,10 @@ export interface LessonReport {
   impactPoints: ImpactPoint[]
   /** 軽量化したフレーム列（スロー再生用、最大 300 フレーム程度）。 */
   frames: SavedFrame[]
+  /** 撮影した実映像（ライブ撮影時のみ。端末内に保存、外部送信なし）。 */
+  videoBlob?: Blob
+  /** 録画映像の MIME タイプ。 */
+  videoMime?: string
   createdAt: number
 }
 

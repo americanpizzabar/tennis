@@ -1,9 +1,50 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getAllLessonReports, getLessonReport, deleteLessonReport } from '../lib/db'
 import { SHOT_EMOJI, SHOT_LABEL } from '../data/idealForms'
 import type { LessonReport, SavedFrame } from '../types/lesson'
 import { LM, SKELETON_EDGES } from '../lib/poseDetector'
+
+/** 撮影した実映像の再生（IndexedDB の Blob から ObjectURL を作る）。 */
+function RecordedVideo({ blob, mime }: { blob: Blob; mime?: string }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [rate, setRate] = useState(1)
+
+  useEffect(() => {
+    const u = URL.createObjectURL(blob)
+    setUrl(u)
+    return () => URL.revokeObjectURL(u)
+  }, [blob])
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.playbackRate = rate
+  }, [rate, url])
+
+  return (
+    <div className="bg-court-card rounded-xl p-3">
+      <div className="text-court-warning font-bold text-sm mb-2">🎥 撮影した実映像</div>
+      {url && (
+        <video ref={videoRef} src={url} controls playsInline
+          className="w-full rounded-lg bg-black aspect-video object-contain" />
+      )}
+      <div className="flex items-center gap-2 mt-2">
+        <span className="text-xs text-gray-400">再生速度</span>
+        {[1, 0.5, 0.25].map(s => (
+          <button key={s} onClick={() => setRate(s)}
+            className={`text-xs px-2 py-0.5 rounded ${
+              rate === s ? 'bg-court-accent text-white font-bold' : 'bg-court-bg text-gray-300'
+            }`}>
+            {s}x
+          </button>
+        ))}
+        <span className="text-xs text-gray-500 ml-auto">
+          {(mime ?? '').includes('mp4') ? 'MP4' : 'WebM'} ・ 端末内のみ保存
+        </span>
+      </div>
+    </div>
+  )
+}
 
 export function LessonDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -76,6 +117,11 @@ export function LessonDetailPage() {
           <div key={i} className="text-sm text-white/90 leading-relaxed">{l.trim()}</div>
         ))}
       </div>
+
+      {/* 撮影した実映像（ライブ撮影時のみ） */}
+      {report.videoBlob && (
+        <RecordedVideo blob={report.videoBlob} mime={report.videoMime} />
+      )}
 
       {/* スロー再生 */}
       <TrajectorySlowMo frames={report.frames} side={report.side}
