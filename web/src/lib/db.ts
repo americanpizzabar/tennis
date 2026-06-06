@@ -1,12 +1,14 @@
 import { openDB, IDBPDatabase } from 'idb'
 import type { MatchReport } from '../types/match'
 import type { LessonReport } from '../types/lesson'
+import type { PlayerScouting } from '../scouting/types'
 
 const DB_NAME = 'tennis-ai-coach'
-const DB_VERSION = 2
+const DB_VERSION = 3
 const STORE_REPORTS = 'match_reports'
 const STORE_SETTINGS = 'settings'
 const STORE_LESSONS = 'lesson_reports'
+const STORE_SCOUTING = 'scouting'
 
 let dbPromise: Promise<IDBPDatabase> | null = null
 
@@ -23,6 +25,11 @@ function getDb(): Promise<IDBPDatabase> {
           const l = db.createObjectStore(STORE_LESSONS, { keyPath: 'lessonId' })
           l.createIndex('createdAt', 'createdAt')
           l.createIndex('shot', 'shot')
+        }
+        if (oldVersion < 3) {
+          const sc = db.createObjectStore(STORE_SCOUTING, { keyPath: 'id' })
+          sc.createIndex('updatedAt', 'updatedAt')
+          sc.createIndex('isMe', 'isMe')
         }
       },
     })
@@ -81,4 +88,32 @@ export async function getLessonReport(lessonId: string): Promise<LessonReport | 
 export async function deleteLessonReport(lessonId: string): Promise<void> {
   const db = await getDb()
   await db.delete(STORE_LESSONS, lessonId)
+}
+
+// ── スカウティング（自分／対戦相手プロファイル） ──────
+export async function saveScouting(p: PlayerScouting): Promise<void> {
+  const db = await getDb()
+  await db.put(STORE_SCOUTING, p)
+}
+
+export async function getAllScoutings(): Promise<PlayerScouting[]> {
+  const db = await getDb()
+  const all = await db.getAllFromIndex(STORE_SCOUTING, 'updatedAt')
+  return (all as PlayerScouting[]).reverse()
+}
+
+export async function getScouting(id: string): Promise<PlayerScouting | undefined> {
+  const db = await getDb()
+  return (await db.get(STORE_SCOUTING, id)) as PlayerScouting | undefined
+}
+
+export async function getMyScouting(): Promise<PlayerScouting | undefined> {
+  const db = await getDb()
+  const all = await db.getAll(STORE_SCOUTING) as PlayerScouting[]
+  return all.find(p => p.isMe)
+}
+
+export async function deleteScouting(id: string): Promise<void> {
+  const db = await getDb()
+  await db.delete(STORE_SCOUTING, id)
 }

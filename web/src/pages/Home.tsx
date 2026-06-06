@@ -57,6 +57,13 @@ export function HomePage() {
       </div>
 
       <ActionRow
+        title="タクティクス・コア（必勝プランナー）"
+        subtitle="自分と相手のスタイル分析から 3D 戦略を自動生成＋音声プレビュー"
+        emoji="🎯"
+        onClick={() => nav('/scouting')}
+      />
+
+      <ActionRow
         title="3D 戦術ボード"
         subtitle="ドローン視点とプレイヤー視点で配球＆ポジションを学ぶ"
         emoji="🛸"

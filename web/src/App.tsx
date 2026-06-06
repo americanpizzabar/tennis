@@ -8,6 +8,9 @@ import { LessonPage } from './pages/Lesson'
 import { LessonListPage } from './pages/LessonList'
 import { LessonDetailPage } from './pages/LessonDetail'
 import { TacticalBoardPage } from './pages/TacticalBoard'
+import { ScoutingDashboardPage } from './pages/ScoutingDashboard'
+import { ScoutingEditorPage } from './pages/ScoutingEditor'
+import { GamePlanPage } from './pages/GamePlan'
 
 // SPA リライトに対応するホスティング（Vercel / Netlify / Cloudflare 等）では
 // BrowserRouter を使うとクリーン URL になる。`file://` で開く or 任意の静的サーバで
@@ -28,6 +31,10 @@ export function App() {
         <Route path="/lesson/new" element={<LessonPage />} />
         <Route path="/lesson/:id" element={<LessonDetailPage />} />
         <Route path="/board" element={<TacticalBoardPage />} />
+        <Route path="/scouting" element={<ScoutingDashboardPage />} />
+        <Route path="/scouting/new" element={<ScoutingEditorPage />} />
+        <Route path="/scouting/edit/:id" element={<ScoutingEditorPage />} />
+        <Route path="/plan/:opponentId" element={<GamePlanPage />} />
       </Routes>
     </Router>
   )
