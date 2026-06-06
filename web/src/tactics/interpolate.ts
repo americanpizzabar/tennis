@@ -1,4 +1,4 @@
-import type { BallKey, DangerZoneKey, PlayerKey } from './types'
+import type { BallKey, DangerZoneKey, PlayerKey, TargetGateKey } from './types'
 
 /** 2D 線形補間。 */
 export function lerp2(
@@ -103,6 +103,43 @@ export function sampleDangerZone(
   }
   const k = keys[keys.length - 1]
   return { center: k.center, radius: k.radius, visible: k.visible }
+}
+
+export function sampleTargetGate(
+  keys: TargetGateKey[], tMs: number,
+): {
+  pos: [number, number, number]
+  normal: [number, number, number]
+  radius: number
+  visible: boolean
+  label?: string
+} | null {
+  if (keys.length === 0) return null
+  if (tMs <= keys[0].tMs) {
+    const k = keys[0]
+    return { pos: k.pos, normal: k.normal, radius: k.radius, visible: k.visible, label: k.label }
+  }
+  if (tMs >= keys[keys.length - 1].tMs) {
+    const k = keys[keys.length - 1]
+    return { pos: k.pos, normal: k.normal, radius: k.radius, visible: k.visible, label: k.label }
+  }
+  for (let i = 0; i < keys.length - 1; i++) {
+    const a = keys[i], b = keys[i + 1]
+    if (tMs >= a.tMs && tMs <= b.tMs) {
+      const span = b.tMs - a.tMs
+      const t = span > 0 ? (tMs - a.tMs) / span : 0
+      const e = easeOutQuad(t)
+      return {
+        pos: lerp3(a.pos, b.pos, e),
+        normal: lerp3(a.normal, b.normal, e),
+        radius: a.radius + (b.radius - a.radius) * e,
+        visible: a.visible || b.visible,
+        label: a.label ?? b.label,
+      }
+    }
+  }
+  const k = keys[keys.length - 1]
+  return { pos: k.pos, normal: k.normal, radius: k.radius, visible: k.visible, label: k.label }
 }
 
 /** 指定時刻に「ちょうど発火する」ナレーションビートを返す。 */

@@ -11,7 +11,16 @@ import type { Scenario } from './types'
  */
 
 // ── シングルス：バイセクト戻り位置（ストレート深く打った後） ──
+// 高精度化：視野コーンとターゲットゲートを追加して空間認知を強化
 const singlesBisectStraight: Scenario = {
+  visionConesOf: 'ALL',
+  pressureRange: { startMs: 3000, endMs: 6000 },
+  targetGates: [
+    { tMs: 0,    pos: [-3.5, 1.0, 9.5], normal: [0, 0, -1], radius: 0.9, visible: true, label: '深く狙う' },
+    { tMs: 2400, pos: [-3.5, 1.0, 9.5], normal: [0, 0, -1], radius: 0.6, visible: false },
+    { tMs: 3000, pos: [-2, 1.0, -10], normal: [0, 0, 1], radius: 1.2, visible: true, label: '🎯 二等分線上に戻る' },
+    { tMs: 6500, pos: [-2, 1.0, -10], normal: [0, 0, 1], radius: 0.5, visible: false },
+  ],
   id: 'singles_bisect_straight',
   category: 'SINGLES_POSITIONING',
   title: 'バイセクト戻り：ストレート深く',
@@ -68,6 +77,14 @@ const singlesBisectStraight: Scenario = {
 
 // ── シングルス：クロス→ストレート展開 ──
 const singlesCrossDtl: Scenario = {
+  visionConesOf: 'ALL',
+  targetGates: [
+    { tMs: 0,    pos: [-3.5, 1.0, 8], normal: [0, 0, -1], radius: 0.8, visible: true, label: 'クロス1' },
+    { tMs: 3300, pos: [-4, 1.0, 8], normal: [0, 0, -1], radius: 0.8, visible: true, label: 'クロス2' },
+    { tMs: 6400, pos: [-4.5, 1.0, 9], normal: [0, 0, -1], radius: 0.8, visible: true, label: 'クロス3' },
+    { tMs: 9500, pos: [3.5, 1.0, 9], normal: [0, 0, -1], radius: 1.2, visible: true, label: '🎯 ストレート！' },
+    { tMs: 11500, pos: [3.5, 1.0, 9], normal: [0, 0, -1], radius: 0.5, visible: false },
+  ],
   id: 'singles_cross_dtl',
   category: 'SINGLES_PATTERN',
   title: 'クロス3球→ダウンザライン',

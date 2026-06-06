@@ -56,6 +56,23 @@ export interface NarrationBeat {
   emphasized?: boolean
 }
 
+/** 「ここを狙え」ターゲットゲート（光るホログラム）。 */
+export interface TargetGateKey {
+  tMs: number
+  /** 3D 位置（x, y, z）。 */
+  pos: [number, number, number]
+  /** 法線方向（リングの向き）。 */
+  normal: [number, number, number]
+  /** リング外半径（メートル）。 */
+  radius: number
+  visible: boolean
+  /** ゲート名。 */
+  label?: string
+}
+
+/** 視野コーンの設定（誰の視野を見せるか）。 */
+export type VisionConeRole = 'YOU' | 'PARTNER' | 'OPP1' | 'OPP2' | 'ALL' | 'NONE'
+
 export type ScenarioCategory =
   | 'SINGLES_POSITIONING'
   | 'SINGLES_PATTERN'
@@ -75,6 +92,12 @@ export interface Scenario {
   players: PlayerTrack[]
   dangerZones: DangerZoneKey[]
   beats: NarrationBeat[]
+  /** 「ここを狙え」ホログラムゲート。 */
+  targetGates?: TargetGateKey[]
+  /** 表示する視野コーン（デフォルトは ALL）。 */
+  visionConesOf?: VisionConeRole
+  /** プレッシャー演出を入れる時刻範囲（POV モードでトンネル視野）。 */
+  pressureRange?: { startMs: number; endMs: number }
   /** 相手の利き手依存（左利き設定で X 軸反転する）。 */
   rightHandedAssumption?: boolean
   /** 関連プロ。 */

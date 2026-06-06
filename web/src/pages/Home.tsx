@@ -65,9 +65,16 @@ export function HomePage() {
 
       <ActionRow
         title="3D 戦術ボード"
-        subtitle="ドローン視点とプレイヤー視点で配球＆ポジションを学ぶ"
+        subtitle="視野コーン・ターゲットゲート・タップでダイブ可能"
         emoji="🛸"
         onClick={() => nav('/board')}
+      />
+
+      <ActionRow
+        title="動画→3D 変換（ホモグラフィ）"
+        subtitle="試合動画の 4 隅をタップ → 実距離 3D 空間に逆算"
+        emoji="🎬"
+        onClick={() => nav('/video-to-3d')}
       />
 
       <ActionRow

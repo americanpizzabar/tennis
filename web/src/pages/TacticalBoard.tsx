@@ -15,6 +15,7 @@ export function TacticalBoardPage() {
   const [playing, setPlaying] = useState(true)
   const [speed, setSpeed] = useState(1)
   const [camera, setCamera] = useState<CameraMode>('DRONE')
+  const [povRole, setPovRole] = useState<'YOU' | 'PARTNER' | 'OPP1' | 'OPP2'>('YOU')
   const [oppLefty, setOppLefty] = useState(false)
   const [showLegend, setShowLegend] = useState(true)
 
@@ -79,6 +80,13 @@ export function TacticalBoardPage() {
         scenario={scenario}
         tMs={tMs}
         cameraMode={camera}
+        povRole={povRole}
+        pressureLevel={computePressure(scenario, tMs)}
+        onPlayerTap={(role) => {
+          setPovRole(role)
+          setCamera('POV')
+        }}
+        onPinchOut={() => setCamera('DRONE')}
       />
 
       {/* タイトル */}
@@ -157,6 +165,32 @@ export function TacticalBoardPage() {
         </button>
       </div>
 
+      {/* POV ロール切替（POV モード時のみ） */}
+      {camera === 'POV' && (
+        <div className="bg-court-card rounded-xl p-3">
+          <div className="text-xs text-gray-400 mb-2">誰の視線でコートを見る？</div>
+          <div className="grid grid-cols-2 gap-2">
+            {scenario.players.map(pl => (
+              <button key={pl.role}
+                onClick={() => setPovRole(pl.role as any)}
+                className={`rounded-lg py-2 px-2 text-xs ${
+                  povRole === pl.role ? 'bg-court-info text-white font-bold' : 'bg-court-surface text-gray-300'
+                }`}>
+                {pl.role === 'YOU' && '👤 '}
+                {pl.role === 'PARTNER' && '🧑‍🤝‍🧑 '}
+                {(pl.role === 'OPP1' || pl.role === 'OPP2') && '🎯 '}
+                {pl.label.slice(0, 12)}
+              </button>
+            ))}
+          </div>
+          {scenario.pressureRange && (
+            <div className="text-xs text-court-warning mt-2">
+              ⚡ プレッシャー演出：シーンの一部でトンネル視野・FOV 圧縮を適用
+            </div>
+          )}
+        </div>
+      )}
+
       {/* オプション */}
       <div className="bg-court-card rounded-xl p-3 space-y-2">
         <label className="flex items-center justify-between text-sm">
@@ -214,6 +248,16 @@ export function TacticalBoardPage() {
       </div>
     </div>
   )
+}
+
+function computePressure(scenario: Scenario, tMs: number): number {
+  const r = scenario.pressureRange
+  if (!r) return 0
+  if (tMs < r.startMs || tMs > r.endMs) return 0
+  const span = r.endMs - r.startMs
+  const inside = (tMs - r.startMs) / Math.max(1, span)
+  // ピークを中央に
+  return 1 - Math.abs(inside - 0.5) * 2
 }
 
 function ScenarioCategorySection({ category, scenarios, selected, onSelect }: {

@@ -11,6 +11,7 @@ import { TacticalBoardPage } from './pages/TacticalBoard'
 import { ScoutingDashboardPage } from './pages/ScoutingDashboard'
 import { ScoutingEditorPage } from './pages/ScoutingEditor'
 import { GamePlanPage } from './pages/GamePlan'
+import { VideoToScenarioPage } from './pages/VideoToScenario'
 
 // SPA リライトに対応するホスティング（Vercel / Netlify / Cloudflare 等）では
 // BrowserRouter を使うとクリーン URL になる。`file://` で開く or 任意の静的サーバで
@@ -35,6 +36,7 @@ export function App() {
         <Route path="/scouting/new" element={<ScoutingEditorPage />} />
         <Route path="/scouting/edit/:id" element={<ScoutingEditorPage />} />
         <Route path="/plan/:opponentId" element={<GamePlanPage />} />
+        <Route path="/video-to-3d" element={<VideoToScenarioPage />} />
       </Routes>
     </Router>
   )
