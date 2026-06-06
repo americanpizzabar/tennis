@@ -7,6 +7,7 @@ import { TacticalAdvisorPage } from './pages/TacticalAdvisor'
 import { LessonPage } from './pages/Lesson'
 import { LessonListPage } from './pages/LessonList'
 import { LessonDetailPage } from './pages/LessonDetail'
+import { TacticalBoardPage } from './pages/TacticalBoard'
 
 // SPA リライトに対応するホスティング（Vercel / Netlify / Cloudflare 等）では
 // BrowserRouter を使うとクリーン URL になる。`file://` で開く or 任意の静的サーバで
@@ -26,6 +27,7 @@ export function App() {
         <Route path="/lessons" element={<LessonListPage />} />
         <Route path="/lesson/new" element={<LessonPage />} />
         <Route path="/lesson/:id" element={<LessonDetailPage />} />
+        <Route path="/board" element={<TacticalBoardPage />} />
       </Routes>
     </Router>
   )

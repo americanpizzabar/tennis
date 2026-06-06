@@ -57,6 +57,13 @@ export function HomePage() {
       </div>
 
       <ActionRow
+        title="3D 戦術ボード"
+        subtitle="ドローン視点とプレイヤー視点で配球＆ポジションを学ぶ"
+        emoji="🛸"
+        onClick={() => nav('/board')}
+      />
+
+      <ActionRow
         title="個人レッスン（AI 骨格診断）"
         subtitle="カメラの前でスイング → 関節角度＋運動連鎖を分析"
         emoji="🤖"
