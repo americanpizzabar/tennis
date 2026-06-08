@@ -551,10 +551,11 @@ function CameraPanel({
   return (
     <div className="space-y-3">
       <div className="relative bg-black rounded-xl overflow-hidden aspect-video">
-        <video ref={videoRef} playsInline muted className="absolute inset-0 w-full h-full object-cover" />
+        <video ref={videoRef} playsInline muted className="absolute inset-0 w-full h-full object-contain" />
         <SkeletonOverlay
           landmarks={previewLm?.landmarks ?? null}
-          width={640} height={360}
+          videoRef={videoRef}
+          objectFit="contain"
         />
         {recording && (
           <div className="absolute top-2 left-2 bg-black/60 rounded px-2 py-1 flex items-center gap-1">
@@ -697,7 +698,8 @@ function UploadProcessingPanel({ videoRef, previewLm, progress, framesCount, fil
           className="absolute inset-0 w-full h-full object-contain" />
         <SkeletonOverlay
           landmarks={previewLm?.landmarks ?? null}
-          width={640} height={360}
+          videoRef={videoRef}
+          objectFit="contain"
         />
         <div className="absolute top-2 left-2 bg-black/60 rounded px-2 py-1 flex items-center gap-1">
           <span className="w-2 h-2 bg-court-warning rounded-full animate-pulse" />
