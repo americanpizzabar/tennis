@@ -12,6 +12,9 @@ import { ScoutingDashboardPage } from './pages/ScoutingDashboard'
 import { ScoutingEditorPage } from './pages/ScoutingEditor'
 import { GamePlanPage } from './pages/GamePlan'
 import { VideoToScenarioPage } from './pages/VideoToScenario'
+import { SyncListPage } from './pages/SyncList'
+import { SyncCapturePage } from './pages/SyncCapture'
+import { SyncReplayPage } from './pages/SyncReplay'
 
 // SPA リライトに対応するホスティング（Vercel / Netlify / Cloudflare 等）では
 // BrowserRouter を使うとクリーン URL になる。`file://` で開く or 任意の静的サーバで
@@ -37,6 +40,9 @@ export function App() {
         <Route path="/scouting/edit/:id" element={<ScoutingEditorPage />} />
         <Route path="/plan/:opponentId" element={<GamePlanPage />} />
         <Route path="/video-to-3d" element={<VideoToScenarioPage />} />
+        <Route path="/sync" element={<SyncListPage />} />
+        <Route path="/sync/new" element={<SyncCapturePage />} />
+        <Route path="/sync/:id" element={<SyncReplayPage />} />
       </Routes>
     </Router>
   )

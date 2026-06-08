@@ -2,13 +2,15 @@ import { openDB, IDBPDatabase } from 'idb'
 import type { MatchReport } from '../types/match'
 import type { LessonReport } from '../types/lesson'
 import type { PlayerScouting } from '../scouting/types'
+import type { SyncSessionRecord } from '../types/sync'
 
 const DB_NAME = 'tennis-ai-coach'
-const DB_VERSION = 3
+const DB_VERSION = 4
 const STORE_REPORTS = 'match_reports'
 const STORE_SETTINGS = 'settings'
 const STORE_LESSONS = 'lesson_reports'
 const STORE_SCOUTING = 'scouting'
+const STORE_SYNC = 'sync_sessions'
 
 let dbPromise: Promise<IDBPDatabase> | null = null
 
@@ -30,6 +32,10 @@ function getDb(): Promise<IDBPDatabase> {
           const sc = db.createObjectStore(STORE_SCOUTING, { keyPath: 'id' })
           sc.createIndex('updatedAt', 'updatedAt')
           sc.createIndex('isMe', 'isMe')
+        }
+        if (oldVersion < 4) {
+          const sy = db.createObjectStore(STORE_SYNC, { keyPath: 'id' })
+          sy.createIndex('createdAt', 'createdAt')
         }
       },
     })
@@ -116,4 +122,26 @@ export async function getMyScouting(): Promise<PlayerScouting | undefined> {
 export async function deleteScouting(id: string): Promise<void> {
   const db = await getDb()
   await db.delete(STORE_SCOUTING, id)
+}
+
+// ── マルチアングル同期撮影セッション ─────────────────
+export async function saveSyncSession(s: SyncSessionRecord): Promise<void> {
+  const db = await getDb()
+  await db.put(STORE_SYNC, s)
+}
+
+export async function getAllSyncSessions(): Promise<SyncSessionRecord[]> {
+  const db = await getDb()
+  const all = await db.getAllFromIndex(STORE_SYNC, 'createdAt')
+  return (all as SyncSessionRecord[]).reverse()
+}
+
+export async function getSyncSession(id: string): Promise<SyncSessionRecord | undefined> {
+  const db = await getDb()
+  return (await db.get(STORE_SYNC, id)) as SyncSessionRecord | undefined
+}
+
+export async function deleteSyncSession(id: string): Promise<void> {
+  const db = await getDb()
+  await db.delete(STORE_SYNC, id)
 }

@@ -71,6 +71,13 @@ export function HomePage() {
       />
 
       <ActionRow
+        title="マルチアングル同期撮影（2 台連動）"
+        subtitle="後方＋サイドを 1 コマのズレなく同時録画 → ツイン再生"
+        emoji="📡"
+        onClick={() => nav('/sync')}
+      />
+
+      <ActionRow
         title="動画→3D 変換（ホモグラフィ）"
         subtitle="試合動画の 4 隅をタップ → 実距離 3D 空間に逆算"
         emoji="🎬"
