@@ -79,6 +79,7 @@ function Row({ rec, onOpen, onDelete }: {
           <div className="text-xs text-gray-400">
             {dateStr} ・ {views || '映像なし'}
             {rec.syncRttMs != null && ` ・ 同期 ${Math.round(rec.syncRttMs)}ms`}
+            {rec.markers && rec.markers.length > 0 && ` ・ 🏷 ${rec.markers.length}`}
           </div>
         </div>
       </button>

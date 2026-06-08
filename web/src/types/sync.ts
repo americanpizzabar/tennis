@@ -14,6 +14,8 @@ export interface SyncSessionRecord {
   startSkewMs: number
   /** 時計同期の品質（RTT ms）。 */
   syncRttMs?: number
+  /** 打点↔弾道リンクのマーカー（共通タイムライン）。 */
+  markers?: SyncMarker[]
 }
 
 export interface SyncClip {
@@ -24,3 +26,17 @@ export interface SyncClip {
   /** 録画開始の壁時計時刻（ホスト基準 epoch ms）。 */
   startEpoch: number
 }
+
+/** マーカーの種別。打点（HIT）・バウンド・サーブ・エース・ミス。 */
+export type MarkerKind = 'HIT' | 'BOUNCE' | 'SERVE' | 'ACE' | 'MISS' | 'NOTE'
+
+/** 共通タイムライン上のマーカー（両カメラ共通の瞬間）。 */
+export interface SyncMarker {
+  id: string
+  /** ホスト基準 epoch ms（クリップの startEpoch と同じ時系列）。 */
+  epoch: number
+  kind: MarkerKind
+  /** 自由記述メモ（任意）。 */
+  note?: string
+}
+
