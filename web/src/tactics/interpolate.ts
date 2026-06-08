@@ -28,54 +28,108 @@ export function easeOutQuad(t: number): number {
   return 1 - (1 - t) * (1 - t)
 }
 
-/** キーフレーム配列から指定時刻の値を補間。 */
-export function sampleBall(keys: BallKey[], tMs: number): [number, number, number] | null {
-  if (keys.length === 0) return null
-  if (tMs <= keys[0].tMs) return keys[0].pos
-  if (tMs >= keys[keys.length - 1].tMs) return keys[keys.length - 1].pos
-  for (let i = 0; i < keys.length - 1; i++) {
-    const a = keys[i], b = keys[i + 1]
-    if (tMs >= a.tMs && tMs <= b.tMs) {
-      const span = b.tMs - a.tMs
-      const t = span > 0 ? (tMs - a.tMs) / span : 0
-      // ボールは放物線っぽく：z 軸の補間は線形、y 軸はちょっと持ち上げ
-      const baseY = a.pos[1] + (b.pos[1] - a.pos[1]) * t
-      const arc = 4 * t * (1 - t)   // 中央で 1、端で 0
-      const peakBoost = Math.max(0, (b.pos[1] - a.pos[1]) * 0.0 + 0.5)
-      return [
-        a.pos[0] + (b.pos[0] - a.pos[0]) * t,
-        baseY + arc * peakBoost,
-        a.pos[2] + (b.pos[2] - a.pos[2]) * t,
-      ]
-    }
-  }
-  return keys[keys.length - 1].pos
+/**
+ * Catmull-Rom スプライン（uniform）。
+ * 4 つの制御点を通って P1→P2 区間を u∈[0,1] で滑らかに補間する。
+ * 端点では「鏡映点（P-1 = 2P0 - P1）」を使い C¹ 連続を維持。
+ *
+ * これにより打点 → apex → バウンドの 3 点キーフレームが
+ * 滑らかな放物線として描かれ、キーフレーム境界の「カクン」が消える。
+ */
+function catmullRom1D(p0: number, p1: number, p2: number, p3: number, u: number): number {
+  const u2 = u * u
+  const u3 = u2 * u
+  return 0.5 * (
+    2 * p1 +
+    (-p0 + p2) * u +
+    (2 * p0 - 5 * p1 + 4 * p2 - p3) * u2 +
+    (-p0 + 3 * p1 - 3 * p2 + p3) * u3
+  )
 }
 
+/**
+ * 時刻付きキーフレーム列から指定時刻の値を Catmull-Rom で補間。
+ *
+ * @param keys 単調増加の tMs を持つキーフレーム配列
+ * @param tMs クエリ時刻
+ * @param value 各キーから N 次元ベクトルを取り出す関数
+ * @param clamps クランプ関数（例：ボールの y を 0 以上に）。
+ */
+function sampleCatmullRomN<T>(
+  keys: Array<{ tMs: number } & T>,
+  tMs: number,
+  value: (k: T) => number[],
+  clamps?: Array<(v: number) => number>,
+): number[] | null {
+  if (keys.length === 0) return null
+  if (keys.length === 1) return value(keys[0])
+  if (tMs <= keys[0].tMs) return value(keys[0])
+  if (tMs >= keys[keys.length - 1].tMs) return value(keys[keys.length - 1])
+
+  let i = 0
+  for (; i < keys.length - 1; i++) {
+    if (tMs >= keys[i].tMs && tMs <= keys[i + 1].tMs) break
+  }
+  const k1 = keys[i]
+  const k2 = keys[i + 1]
+  // 端点の鏡映で P0, P3 を確保
+  const k0 = i > 0 ? keys[i - 1] : { ...k1, tMs: k1.tMs - (k2.tMs - k1.tMs) }
+  const k3 = i + 2 < keys.length ? keys[i + 2] : { ...k2, tMs: k2.tMs + (k2.tMs - k1.tMs) }
+  const span = k2.tMs - k1.tMs
+  const u = span > 0 ? (tMs - k1.tMs) / span : 0
+
+  const v0 = value(k0 as any), v1 = value(k1 as any), v2 = value(k2 as any), v3 = value(k3 as any)
+  const dim = v1.length
+  const out: number[] = new Array(dim)
+  for (let d = 0; d < dim; d++) {
+    let v = catmullRom1D(v0[d], v1[d], v2[d], v3[d], u)
+    if (clamps && clamps[d]) v = clamps[d](v)
+    out[d] = v
+  }
+  return out
+}
+
+/**
+ * ボールキーフレーム補間。
+ * rallyBuilder が「打点 → apex → バウンド」の 3 点を入れているので、
+ * Catmull-Rom を通すと放物線に近い自然な弧になる。
+ * y は床貫通を防ぐためクランプ。
+ */
+export function sampleBall(keys: BallKey[], tMs: number): [number, number, number] | null {
+  const r = sampleCatmullRomN(
+    keys, tMs,
+    k => [k.pos[0], k.pos[1], k.pos[2]],
+    [undefined as any, (y: number) => Math.max(0, y), undefined as any],
+  )
+  return r ? [r[0], r[1], r[2]] : null
+}
+
+/**
+ * プレイヤー補間：位置は Catmull-Rom で全体を滑らかに、
+ * facing は前回値からの線形補間（向きは離散的に切り替わるのが自然）。
+ *
+ * 旧実装はキーフレームごとに easeInOutCubic していたため、各キー境界で
+ * 「いったん止まる → 加速」のパルスが入り、ガクガク見えていた。
+ * Catmull-Rom にすることで境界で速度が連続する。
+ */
 export function samplePlayer(
   keys: PlayerKey[], tMs: number,
 ): { pos: [number, number]; facing: number } | null {
   if (keys.length === 0) return null
-  let lastFacing = keys[0].facing ?? 0
-  if (tMs <= keys[0].tMs) return { pos: keys[0].pos, facing: lastFacing }
+  // facing：直近の指定値を伝播
+  let facing = keys[0].facing ?? 0
   if (tMs >= keys[keys.length - 1].tMs) {
-    for (const k of keys) if (k.facing !== undefined) lastFacing = k.facing
-    return { pos: keys[keys.length - 1].pos, facing: lastFacing }
+    for (const k of keys) if (k.facing !== undefined) facing = k.facing
+    return { pos: keys[keys.length - 1].pos, facing }
   }
-  for (let i = 0; i < keys.length - 1; i++) {
-    const a = keys[i], b = keys[i + 1]
-    if (a.facing !== undefined) lastFacing = a.facing
-    if (tMs >= a.tMs && tMs <= b.tMs) {
-      const span = b.tMs - a.tMs
-      const tRaw = span > 0 ? (tMs - a.tMs) / span : 0
-      const t = easeInOutCubic(tRaw)
-      const facing = b.facing !== undefined
-        ? lastFacing + (b.facing - lastFacing) * t
-        : lastFacing
-      return { pos: lerp2(a.pos, b.pos, t), facing }
-    }
+  for (const k of keys) {
+    if (k.tMs > tMs) break
+    if (k.facing !== undefined) facing = k.facing
   }
-  return { pos: keys[keys.length - 1].pos, facing: lastFacing }
+
+  const r = sampleCatmullRomN(keys, tMs, k => [k.pos[0], k.pos[1]])
+  if (!r) return null
+  return { pos: [r[0], r[1]], facing }
 }
 
 export function sampleDangerZone(

@@ -1,22 +1,33 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAllMatchReports, deleteMatchReport } from '../lib/db'
+import { getAllMatchReports, deleteMatchReport, getAllSyncSessions, getAllLessonReports } from '../lib/db'
 import type { MatchReport, MatchType } from '../types/match'
+import type { SyncSessionRecord } from '../types/sync'
+import type { LessonReport } from '../types/lesson'
 import { useMatchStore } from '../store/matchStore'
 
 export function HomePage() {
   const nav = useNavigate()
   const startMatch = useMatchStore(s => s.startMatch)
   const [reports, setReports] = useState<MatchReport[]>([])
+  const [syncSessions, setSyncSessions] = useState<SyncSessionRecord[]>([])
+  const [lessons, setLessons] = useState<LessonReport[]>([])
   const [confirmDel, setConfirmDel] = useState<MatchReport | null>(null)
 
-  const reload = () => getAllMatchReports().then(setReports)
+  const reload = () => {
+    getAllMatchReports().then(setReports)
+    getAllSyncSessions().then(setSyncSessions)
+    getAllLessonReports().then(setLessons)
+  }
   useEffect(() => { reload() }, [])
 
   const handleStart = (mt: MatchType) => {
     startMatch(mt)
     nav('/match-setup')
   }
+
+  const lastSync = syncSessions[0]
+  const lastLesson = lessons[0]
 
   return (
     <div className="max-w-md mx-auto p-4 space-y-4 pb-24">
@@ -25,19 +36,30 @@ export function HomePage() {
         <p className="text-xs text-gray-400 mt-1">Web 版 — オフライン動作・データは端末内に保存</p>
       </header>
 
-      {/* 機能の現実を率直に */}
-      <div className="bg-blue-950/60 border border-court-info/30 rounded-xl p-3 text-sm">
-        <div className="text-court-info font-bold mb-1">💡 このアプリの使い方のコツ</div>
-        <ul className="text-white/90 text-xs space-y-0.5 leading-relaxed">
-          <li>・スコア管理＋詳細スタッツが最も実用的</li>
-          <li>・着弾点はコート図を「タップ」して手動入力</li>
-          <li>・戦術ヒントはオフライン・ルールベース</li>
-          <li>・PWA としてホーム画面に追加可能</li>
-        </ul>
-      </div>
+      {/* 続きから（最近のセッションへのショートカット） */}
+      {(lastSync || lastLesson) && (
+        <div className="space-y-2">
+          {lastSync && (
+            <ContinueRow
+              emoji="📡"
+              title="続き：直前の同期撮影"
+              subtitle={lastSync.title}
+              onClick={() => nav(`/sync/${lastSync.id}`)}
+            />
+          )}
+          {lastLesson && (
+            <ContinueRow
+              emoji="🤖"
+              title="続き：直前のレッスン"
+              subtitle={shotLabel(lastLesson.shot) + ' ・ ' + new Date(lastLesson.createdAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              onClick={() => nav(`/lesson/${lastLesson.lessonId}`)}
+            />
+          )}
+        </div>
+      )}
 
-      <div>
-        <h2 className="font-bold mb-2">試合を開始</h2>
+      {/* ── ① 試合 ── */}
+      <Section title="① 試合" subtitle="スコア／スタッツ／戦術ヒント">
         <div className="grid grid-cols-2 gap-3">
           <button
             onClick={() => handleStart('SINGLES')}
@@ -54,64 +76,65 @@ export function HomePage() {
             <span>ダブルス</span>
           </button>
         </div>
-      </div>
+      </Section>
 
-      <ActionRow
-        title="タクティクス・コア（必勝プランナー）"
-        subtitle="自分と相手のスタイル分析から 3D 戦略を自動生成＋音声プレビュー"
-        emoji="🎯"
-        onClick={() => nav('/scouting')}
-      />
+      {/* ── ② 練習・診断 ── */}
+      <Section title="② 練習・フォーム診断" subtitle="個人の上達のための骨格 AI">
+        <ActionRow
+          title="個人レッスン（AI 骨格診断）"
+          subtitle="カメラの前でスイング → 関節角度・運動連鎖を分析"
+          emoji="🤖"
+          onClick={() => nav('/lessons')}
+        />
+        <ActionRow
+          title="マルチアングル同期撮影（2 台連動）"
+          subtitle="後方＋サイドを同時録画 → 因果分析・3D 弾道・プロ仕様アナリティクス"
+          emoji="📡"
+          badge="PRO"
+          onClick={() => nav('/sync')}
+        />
+      </Section>
 
-      <ActionRow
-        title="3D 戦術ボード"
-        subtitle="視野コーン・ターゲットゲート・タップでダイブ可能"
-        emoji="🛸"
-        onClick={() => nav('/board')}
-      />
+      {/* ── ③ 戦術・戦略 ── */}
+      <Section title="③ 戦術・戦略" subtitle="3D ボードと AI 必勝プラン">
+        <ActionRow
+          title="タクティクス・コア"
+          subtitle="自分と相手のスタイル分析 → 必勝プラン自動生成"
+          emoji="🎯"
+          onClick={() => nav('/scouting')}
+        />
+        <ActionRow
+          title="3D 戦術ボード"
+          subtitle="視野コーン・ターゲットゲート・タップでダイブ"
+          emoji="🛸"
+          onClick={() => nav('/board')}
+        />
+        <ActionRow
+          title="戦術アドバイザー"
+          subtitle="状況を選ぶだけでプロの戦術を提案（オフライン）"
+          emoji="💡"
+          onClick={() => nav('/advisor')}
+        />
+        <ActionRow
+          title="動画→3D 変換"
+          subtitle="試合動画の 4 隅をタップ → 実距離 3D 空間に逆算"
+          emoji="🎬"
+          onClick={() => nav('/video-to-3d')}
+        />
+      </Section>
 
-      <ActionRow
-        title="マルチアングル同期撮影（2 台連動）"
-        subtitle="後方＋サイドを 1 コマのズレなく同時録画 → ツイン再生"
-        emoji="📡"
-        onClick={() => nav('/sync')}
-      />
-
-      <ActionRow
-        title="動画→3D 変換（ホモグラフィ）"
-        subtitle="試合動画の 4 隅をタップ → 実距離 3D 空間に逆算"
-        emoji="🎬"
-        onClick={() => nav('/video-to-3d')}
-      />
-
-      <ActionRow
-        title="個人レッスン（AI 骨格診断）"
-        subtitle="カメラの前でスイング → 関節角度＋運動連鎖を分析"
-        emoji="🤖"
-        onClick={() => nav('/lessons')}
-      />
-
-      <ActionRow
-        title="戦術アドバイザー"
-        subtitle="状況を選ぶだけでプロの戦術を提案"
-        emoji="💡"
-        onClick={() => nav('/advisor')}
-      />
-
+      {/* ── 最近の試合 ── */}
       {reports.length > 0 && (
-        <div>
-          <h2 className="font-bold mb-2">最近の試合</h2>
-          <div className="space-y-2">
-            {reports.map(r => (
-              <ReportRow
-                key={r.matchId}
-                report={r}
-                onOpen={() => nav(`/report/${r.matchId}`)}
-                onLongPress={() => setConfirmDel(r)}
-              />
-            ))}
-          </div>
-        </div>
+        <Section title="最近の試合" subtitle={`${reports.length} 件`}>
+          {reports.slice(0, 5).map(r => (
+            <ReportRow
+              key={r.matchId}
+              report={r}
+              onOpen={() => nav(`/report/${r.matchId}`)}
+              onLongPress={() => setConfirmDel(r)}
+            />
+          ))}
+        </Section>
       )}
 
       {confirmDel && (
@@ -142,8 +165,38 @@ export function HomePage() {
   )
 }
 
-function ActionRow({ title, subtitle, emoji, onClick }: {
-  title: string; subtitle: string; emoji: string; onClick: () => void;
+function Section({ title, subtitle, children }: {
+  title: string; subtitle?: string; children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <div className="flex items-baseline justify-between mb-2">
+        <h2 className="font-bold">{title}</h2>
+        {subtitle && <span className="text-[10px] text-gray-500">{subtitle}</span>}
+      </div>
+      <div className="space-y-2">{children}</div>
+    </section>
+  )
+}
+
+function ContinueRow({ emoji, title, subtitle, onClick }: {
+  emoji: string; title: string; subtitle: string; onClick: () => void;
+}) {
+  return (
+    <button onClick={onClick}
+      className="w-full bg-gradient-to-r from-emerald-900 to-emerald-700 rounded-xl p-3 flex items-center gap-3 text-left active:scale-[0.98] transition">
+      <span className="text-2xl">{emoji}</span>
+      <div className="flex-1 min-w-0">
+        <div className="font-bold text-sm">{title}</div>
+        <div className="text-xs text-gray-200/80 truncate">{subtitle}</div>
+      </div>
+      <span className="text-white/70">›</span>
+    </button>
+  )
+}
+
+function ActionRow({ title, subtitle, emoji, badge, onClick }: {
+  title: string; subtitle: string; emoji: string; badge?: string; onClick: () => void;
 }) {
   return (
     <button
@@ -151,13 +204,29 @@ function ActionRow({ title, subtitle, emoji, onClick }: {
       className="w-full bg-court-card rounded-xl p-3 flex items-center gap-3 text-left active:scale-[0.98] transition"
     >
       <span className="text-2xl">{emoji}</span>
-      <div className="flex-1">
-        <div className="font-bold">{title}</div>
-        <div className="text-xs text-gray-400">{subtitle}</div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="font-bold">{title}</span>
+          {badge && (
+            <span className="text-[9px] font-bold bg-gradient-to-r from-purple-700 to-rose-600 text-white px-1.5 py-0.5 rounded">
+              {badge}
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-gray-400 truncate">{subtitle}</div>
       </div>
       <span className="text-gray-500">›</span>
     </button>
   )
+}
+
+function shotLabel(s: string): string {
+  const map: Record<string, string> = {
+    FOREHAND: 'フォアハンド', BACKHAND_ONE_HANDED: '片手バック',
+    BACKHAND_TWO_HANDED: '両手バック', SERVE: 'サーブ',
+    VOLLEY: 'ボレー', SLICE: 'スライス', SMASH: 'スマッシュ',
+  }
+  return map[s] ?? s
 }
 
 function ReportRow({ report, onOpen, onLongPress }: {
