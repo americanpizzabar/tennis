@@ -15,6 +15,7 @@ import { VideoToScenarioPage } from './pages/VideoToScenario'
 import { SyncListPage } from './pages/SyncList'
 import { SyncCapturePage } from './pages/SyncCapture'
 import { SyncReplayPage } from './pages/SyncReplay'
+import { SyncTrajectoryPage } from './pages/SyncTrajectory'
 
 // SPA リライトに対応するホスティング（Vercel / Netlify / Cloudflare 等）では
 // BrowserRouter を使うとクリーン URL になる。`file://` で開く or 任意の静的サーバで
@@ -43,6 +44,7 @@ export function App() {
         <Route path="/sync" element={<SyncListPage />} />
         <Route path="/sync/new" element={<SyncCapturePage />} />
         <Route path="/sync/:id" element={<SyncReplayPage />} />
+        <Route path="/sync/:id/3d" element={<SyncTrajectoryPage />} />
       </Routes>
     </Router>
   )

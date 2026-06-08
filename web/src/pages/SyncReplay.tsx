@@ -351,6 +351,15 @@ export function SyncReplayPage() {
         </div>
       </div>
 
+      {rec.back && rec.side && (
+        <button onClick={() => nav(`/sync/${rec.id}/3d`)}
+          className="w-full bg-gradient-to-br from-indigo-800 to-blue-700 text-white font-bold py-3 rounded-xl active:scale-95 transition flex items-center justify-center gap-2">
+          <span className="text-xl">🛰</span>
+          <span>3D 弾道変換（2 視点三角測量）</span>
+          <span className="text-gray-300 text-xs">{rec.ballTags?.length ?? 0} タグ済み</span>
+        </button>
+      )}
+
       <div className="bg-blue-950/60 rounded-xl p-3 text-xs text-white/80 leading-relaxed">
         💡 後方カメラで「配球（結果）」を、サイドカメラで「打点・フォーム（原因）」を
         同じ瞬間で見比べられます。スローにして打点の前後を観察しましょう。
