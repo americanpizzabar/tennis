@@ -3,14 +3,16 @@ import type { MatchReport } from '../types/match'
 import type { LessonReport } from '../types/lesson'
 import type { PlayerScouting } from '../scouting/types'
 import type { SyncSessionRecord } from '../types/sync'
+import type { VoiceAnnotation } from '../types/annotation'
 
 const DB_NAME = 'tennis-ai-coach'
-const DB_VERSION = 4
+const DB_VERSION = 5
 const STORE_REPORTS = 'match_reports'
 const STORE_SETTINGS = 'settings'
 const STORE_LESSONS = 'lesson_reports'
 const STORE_SCOUTING = 'scouting'
 const STORE_SYNC = 'sync_sessions'
+const STORE_ANNOTATIONS = 'voice_annotations'
 
 let dbPromise: Promise<IDBPDatabase> | null = null
 
@@ -36,6 +38,11 @@ function getDb(): Promise<IDBPDatabase> {
         if (oldVersion < 4) {
           const sy = db.createObjectStore(STORE_SYNC, { keyPath: 'id' })
           sy.createIndex('createdAt', 'createdAt')
+        }
+        if (oldVersion < 5) {
+          const an = db.createObjectStore(STORE_ANNOTATIONS, { keyPath: 'id' })
+          an.createIndex('createdAt', 'createdAt')
+          an.createIndex('syncId', 'syncId')
         }
       },
     })
@@ -144,4 +151,26 @@ export async function getSyncSession(id: string): Promise<SyncSessionRecord | un
 export async function deleteSyncSession(id: string): Promise<void> {
   const db = await getDb()
   await db.delete(STORE_SYNC, id)
+}
+
+// ── ボイス・アノテーション ──────────────────────────
+export async function saveAnnotation(a: VoiceAnnotation): Promise<void> {
+  const db = await getDb()
+  await db.put(STORE_ANNOTATIONS, a)
+}
+
+export async function getAnnotationsForSync(syncId: string): Promise<VoiceAnnotation[]> {
+  const db = await getDb()
+  const all = (await db.getAllFromIndex(STORE_ANNOTATIONS, 'syncId', syncId)) as VoiceAnnotation[]
+  return all.sort((a, b) => b.createdAt - a.createdAt)
+}
+
+export async function getAnnotation(id: string): Promise<VoiceAnnotation | undefined> {
+  const db = await getDb()
+  return (await db.get(STORE_ANNOTATIONS, id)) as VoiceAnnotation | undefined
+}
+
+export async function deleteAnnotation(id: string): Promise<void> {
+  const db = await getDb()
+  await db.delete(STORE_ANNOTATIONS, id)
 }

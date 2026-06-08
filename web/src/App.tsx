@@ -16,6 +16,7 @@ import { SyncListPage } from './pages/SyncList'
 import { SyncCapturePage } from './pages/SyncCapture'
 import { SyncReplayPage } from './pages/SyncReplay'
 import { SyncTrajectoryPage } from './pages/SyncTrajectory'
+import { ProAnalyticsPage } from './pages/ProAnalytics'
 
 // SPA リライトに対応するホスティング（Vercel / Netlify / Cloudflare 等）では
 // BrowserRouter を使うとクリーン URL になる。`file://` で開く or 任意の静的サーバで
@@ -45,6 +46,7 @@ export function App() {
         <Route path="/sync/new" element={<SyncCapturePage />} />
         <Route path="/sync/:id" element={<SyncReplayPage />} />
         <Route path="/sync/:id/3d" element={<SyncTrajectoryPage />} />
+        <Route path="/sync/:id/pro" element={<ProAnalyticsPage />} />
       </Routes>
     </Router>
   )
