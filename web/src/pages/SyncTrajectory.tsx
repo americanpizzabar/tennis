@@ -13,6 +13,11 @@ import {
 } from '../lib/triangulation'
 import { TacticalBoard3D } from '../components/TacticalBoard3D'
 import type { BallKey, Scenario } from '../tactics/types'
+import { detectBallInFrame } from '../lib/ballDetector'
+import { computeShotMetrics, SPIN_LABEL, type ShotMetric } from '../lib/ballMechanics'
+import { buildCausalReport, type CausalReport } from '../lib/causalAnalysis'
+import { detectVideoFrame, warmupPoseModel } from '../lib/poseDetector'
+import type { NormalizedLandmark } from '@mediapipe/tasks-vision'
 
 /**
  * Phase 4：2 視点ホモグラフィ → 三角測量で 3D 弾道を生成。
@@ -51,6 +56,9 @@ export function SyncTrajectoryPage() {
   const [tapBack, setTapBack] = useState<Point2D | null>(null)
   const [tapSide, setTapSide] = useState<Point2D | null>(null)
   const [ballTags, setBallTags] = useState<BallTag[]>([])
+  const [autoBusy, setAutoBusy] = useState(false)
+  /** 各 HIT/SERVE マーカーで検出した骨格（causal 分析用）。 */
+  const [poseAtMarker, setPoseAtMarker] = useState<Record<string, NormalizedLandmark[] | null>>({})
 
   // ── プレビュー ──
   const [previewT, setPreviewT] = useState(0)
@@ -199,6 +207,106 @@ export function SyncTrajectoryPage() {
     const y = (e.clientY - rect.top) / rect.height
     if (which === 'BACK') setTapBack([x, y])
     else setTapSide([x, y])
+  }
+
+  // ── 🤖 自動検出（ボール）：両カメラの現フレームをスキャン ──
+  const autoDetect = async () => {
+    if (autoBusy) return
+    setAutoBusy(true)
+    try {
+      // ヒント：直前のタグから位置の連続性を利用
+      const prevTag = ballTags
+        .map(t => ({ t, m: rec?.markers?.find(x => x.id === t.markerId) }))
+        .filter(x => x.m && x.m.epoch < (currentMarker?.epoch ?? 0))
+        .sort((a, b) => (b.m!.epoch - a.m!.epoch))[0]?.t
+      const back = backRef.current
+      const side = sideRef.current
+      if (back && back.readyState >= 2) {
+        const r = detectBallInFrame(back, { hint: prevTag?.tapBack })
+        if (r) setTapBack(r.pos)
+      }
+      if (side && side.readyState >= 2) {
+        const r = detectBallInFrame(side, { hint: prevTag?.tapSide })
+        if (r) setTapSide(r.pos)
+      }
+    } finally {
+      setAutoBusy(false)
+    }
+  }
+
+  // ── 全マーカー一括自動検出＋骨格抽出 ──
+  const autoDetectAll = async () => {
+    if (!rec || markers.length === 0 || autoBusy) return
+    setAutoBusy(true)
+    try {
+      await warmupPoseModel().catch(() => { /* モデル無くても続行 */ })
+      const newTags: BallTag[] = [...ballTags]
+      const newPose: Record<string, NormalizedLandmark[] | null> = { ...poseAtMarker }
+      for (const m of markers) {
+        // 両動画を該当時刻にシーク
+        if (rec.back && backRef.current) {
+          backRef.current.currentTime = Math.max(0, Math.min((m.epoch - rec.back.startEpoch) / 1000, rec.back.durationSec))
+        }
+        if (rec.side && sideRef.current) {
+          sideRef.current.currentTime = Math.max(0, Math.min((m.epoch - rec.side.startEpoch) / 1000, rec.side.durationSec))
+        }
+        await waitForSeek(backRef.current)
+        await waitForSeek(sideRef.current)
+        // ボール検出
+        let tB: Point2D | null = null, tS: Point2D | null = null
+        if (backRef.current) {
+          const r = detectBallInFrame(backRef.current)
+          if (r) tB = r.pos
+        }
+        if (sideRef.current) {
+          const r = detectBallInFrame(sideRef.current)
+          if (r) tS = r.pos
+        }
+        // 三角測量 or フォールバック
+        let pos: [number, number, number] | null = null
+        let gap: number | undefined
+        if (tB && tS && camBack && camSide) {
+          const tri = triangulateBall(camBack, tB, camSide, tS)
+          pos = tri.pos; gap = tri.gap
+        } else if (tB && H_back) {
+          pos = projectToGround(H_back, tB[0], tB[1])
+        } else if (tS && H_side) {
+          pos = projectToGround(H_side, tS[0], tS[1])
+        }
+        if (pos) {
+          const tag: BallTag = {
+            markerId: m.id, pos, tapBack: tB ?? undefined, tapSide: tS ?? undefined, gap,
+          }
+          const k = newTags.findIndex(x => x.markerId === m.id)
+          if (k >= 0) newTags[k] = tag; else newTags.push(tag)
+        }
+        // 骨格（サイドカメラ）— HIT/SERVE のみ
+        if ((m.kind === 'HIT' || m.kind === 'SERVE') && sideRef.current) {
+          try {
+            const ts = Math.floor((m.epoch - (rec.side?.startEpoch ?? 0)))
+            const safeTs = Math.max(1, ts)
+            const frame = await detectVideoFrame(sideRef.current, safeTs)
+            newPose[m.id] = frame.landmarks
+          } catch { /* noop */ }
+        }
+      }
+      await saveTags(newTags)
+      setPoseAtMarker(newPose)
+    } finally {
+      setAutoBusy(false)
+    }
+  }
+
+  // ── 単マーカーで骨格を再検出（causal を更新） ──
+  const detectPoseHere = async () => {
+    if (!currentMarker || !sideRef.current) return
+    if (!(currentMarker.kind === 'HIT' || currentMarker.kind === 'SERVE')) return
+    await warmupPoseModel().catch(() => {})
+    try {
+      const ts = Math.max(1, Math.floor((currentMarker.epoch - (rec?.side?.startEpoch ?? 0))))
+      const frame = await detectVideoFrame(sideRef.current, ts)
+      setPoseAtMarker(p => ({ ...p, [currentMarker.id]: frame.landmarks }))
+    } catch { /* noop */ }
   }
 
   // ── 現マーカーの三角測量結果 ──
@@ -356,6 +464,11 @@ export function SyncTrajectoryPage() {
           onClearTaps={() => { setTapBack(null); setTapSide(null) }}
           onReCalibrate={() => setPhase('CALIBRATE_BACK')}
           onFinish={() => previewScenario && setPhase('PREVIEW')}
+          onAutoDetect={autoDetect}
+          onAutoDetectAll={autoDetectAll}
+          onDetectPose={detectPoseHere}
+          autoBusy={autoBusy}
+          poseAtMarker={poseAtMarker}
         />
       )}
 
@@ -384,6 +497,9 @@ export function SyncTrajectoryPage() {
             </div>
             <TagAccuracy ballTags={ballTags} />
           </div>
+
+          {/* ── 球速・スピン・因果テキスト ── */}
+          <MetricsAndCausal rec={rec} poseAtMarker={poseAtMarker} />
         </div>
       )}
     </div>
@@ -436,6 +552,7 @@ function TagPane({
   rec, markers, backRef, sideRef, tapBack, tapSide,
   onTapBack, onTapSide, tagIdx, setTagIdx, ballTags, triangulated,
   onCommit, onClearTaps, onReCalibrate, onFinish,
+  onAutoDetect, onAutoDetectAll, onDetectPose, autoBusy, poseAtMarker,
 }: {
   rec: SyncSessionRecord
   markers: SyncMarker[]
@@ -453,6 +570,11 @@ function TagPane({
   onClearTaps: () => void
   onReCalibrate: () => void
   onFinish: () => void
+  onAutoDetect: () => void
+  onAutoDetectAll: () => void
+  onDetectPose: () => void
+  autoBusy: boolean
+  poseAtMarker: Record<string, NormalizedLandmark[] | null>
 }) {
   if (markers.length === 0) {
     return (
@@ -509,16 +631,33 @@ function TagPane({
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
+        <button onClick={onAutoDetect} disabled={autoBusy}
+          className="bg-court-info disabled:bg-gray-700 text-white text-xs font-bold py-2 rounded-lg active:scale-95 flex items-center justify-center gap-1">
+          🤖 <span>{autoBusy ? '検出中…' : '自動検出'}</span>
+        </button>
         <button onClick={onClearTaps}
-          className="bg-court-card text-court-danger text-sm font-bold py-2 rounded-lg">
-          ✕ タップを消す
+          className="bg-court-card text-court-danger text-xs font-bold py-2 rounded-lg">
+          ✕ タップ消去
         </button>
         <button onClick={onCommit}
           disabled={!triangulated}
-          className="bg-court-accent disabled:bg-gray-700 text-white text-sm font-bold py-2 rounded-lg active:scale-95">
-          {tagged ? '✓ 上書き保存' : '💾 このタグを保存'}
+          className="bg-court-accent disabled:bg-gray-700 text-white text-xs font-bold py-2 rounded-lg active:scale-95">
+          {tagged ? '✓ 上書き' : '💾 保存'}
         </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={onAutoDetectAll} disabled={autoBusy}
+          className="bg-gradient-to-br from-indigo-800 to-blue-700 disabled:bg-gray-700 text-white text-xs font-bold py-2 rounded-lg active:scale-95">
+          🤖 全マーカー一括自動検出
+        </button>
+        {(m.kind === 'HIT' || m.kind === 'SERVE') && (
+          <button onClick={onDetectPose} disabled={autoBusy}
+            className="bg-court-card text-court-info text-xs font-bold py-2 rounded-lg active:scale-95">
+            🦴 骨格を検出{poseAtMarker[m.id] ? ' ✓' : ''}
+          </button>
+        )}
       </div>
 
       <div className="bg-court-card rounded-xl p-3 text-xs flex items-center justify-between">
@@ -636,6 +775,127 @@ function TagAccuracy({ ballTags }: { ballTags: BallTag[] }) {
     <div className="text-gray-500 text-[10px] mt-1">
       平均光線ミス距離：{(avgGap * 100).toFixed(0)} cm — {label}
     </div>
+  )
+}
+
+function waitForSeek(v: HTMLVideoElement | null): Promise<void> {
+  if (!v) return Promise.resolve()
+  return new Promise(resolve => {
+    let done = false
+    const cleanup = () => { v.removeEventListener('seeked', onSeeked); done = true; resolve() }
+    const onSeeked = () => { if (!done) cleanup() }
+    v.addEventListener('seeked', onSeeked)
+    // 保険：300ms で打ち切り
+    setTimeout(() => { if (!done) cleanup() }, 300)
+  })
+}
+
+function MetricsAndCausal({ rec, poseAtMarker }: {
+  rec: SyncSessionRecord;
+  poseAtMarker: Record<string, NormalizedLandmark[] | null>;
+}) {
+  const metrics: ShotMetric[] = useMemo(() => computeShotMetrics(rec), [rec])
+  const reports: CausalReport[] = useMemo(() => {
+    const markers = rec.markers ?? []
+    const out: CausalReport[] = []
+    for (const m of metrics) {
+      const marker = markers.find(x => x.id === m.markerId)
+      if (!marker) continue
+      const sorted = markers.slice().sort((a, b) => a.epoch - b.epoch)
+      const idx = sorted.findIndex(x => x.id === marker.id)
+      const next = sorted[idx + 1]
+      out.push(buildCausalReport({
+        marker, metric: m,
+        sideLandmarks: poseAtMarker[marker.id] ?? null,
+        nextMarker: next,
+      }))
+    }
+    return out
+  }, [rec, metrics, poseAtMarker])
+
+  if (metrics.length === 0) {
+    return (
+      <div className="bg-court-card rounded-xl p-3 text-xs text-gray-400">
+        球速・因果分析には HIT/SERVE と BOUNCE のマーカー＋タグが必要です。
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* 集計 */}
+      <div className="bg-court-card rounded-xl p-3">
+        <div className="text-xs text-gray-400 mb-2">📊 ショット集計</div>
+        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+          <Cell label="ショット数" value={`${metrics.length}`} />
+          <Cell label="平均球速"
+            value={avgKmh(metrics) != null ? `${avgKmh(metrics)!.toFixed(0)} km/h` : '—'} />
+          <Cell label="最高球速"
+            value={maxKmh(metrics) != null ? `${maxKmh(metrics)!.toFixed(0)} km/h` : '—'} />
+        </div>
+      </div>
+
+      {/* 各ショットの因果カード */}
+      <div className="space-y-2">
+        {reports.map((r, i) => {
+          const m = metrics[i]
+          return (
+            <div key={r.markerId} className="bg-court-card rounded-xl p-3 space-y-1.5">
+              <div className="text-sm font-bold text-court-accent">{r.headline}</div>
+              {/* 数値 */}
+              <div className="flex flex-wrap gap-1.5 text-[10px]">
+                {m.speedKmh != null && <Pill>球速 {m.speedKmh.toFixed(0)} km/h</Pill>}
+                {m.apexM != null && <Pill>最高点 {m.apexM.toFixed(1)} m</Pill>}
+                {m.netClearM != null && <Pill>ネット上 {m.netClearM.toFixed(2)} m</Pill>}
+                {m.spin !== 'UNKNOWN' && <Pill>{SPIN_LABEL[m.spin]}</Pill>}
+                {m.bouncePos && (
+                  <Pill>着弾 ({m.bouncePos[0].toFixed(1)}, {m.bouncePos[1].toFixed(1)})</Pill>
+                )}
+              </div>
+              {/* 因果タグ */}
+              {(r.causeTags.length > 0 || r.resultTags.length > 0) && (
+                <div className="flex flex-wrap gap-1 text-[10px]">
+                  {r.causeTags.map((t, j) => (
+                    <span key={'c' + j} className="bg-blue-900/60 text-blue-200 px-1.5 py-0.5 rounded">
+                      原因：{t}
+                    </span>
+                  ))}
+                  {r.resultTags.map((t, j) => (
+                    <span key={'r' + j} className="bg-emerald-900/60 text-emerald-200 px-1.5 py-0.5 rounded">
+                      結果：{t}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function avgKmh(metrics: ShotMetric[]): number | null {
+  const vals = metrics.map(m => m.speedKmh).filter((v): v is number => v != null)
+  if (vals.length === 0) return null
+  return vals.reduce((s, v) => s + v, 0) / vals.length
+}
+function maxKmh(metrics: ShotMetric[]): number | null {
+  const vals = metrics.map(m => m.speedKmh).filter((v): v is number => v != null)
+  if (vals.length === 0) return null
+  return Math.max(...vals)
+}
+function Cell({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-lg font-black text-court-accent">{value}</div>
+      <div className="text-[10px] text-gray-400">{label}</div>
+    </div>
+  )
+}
+function Pill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="bg-court-surface text-gray-200 px-1.5 py-0.5 rounded">{children}</span>
   )
 }
 
