@@ -93,6 +93,12 @@ export function HomePage() {
           badge="PRO"
           onClick={() => nav('/sync')}
         />
+        <ActionRow
+          title="弾道トレーサー（動画解析）"
+          subtitle="ラリー動画からボール軌跡を検出 → ネオン弾道・イン/アウト判定"
+          emoji="☄️"
+          onClick={() => nav('/ball-tracer')}
+        />
       </Section>
 
       {/* ── ③ 戦術・戦略 ── */}
