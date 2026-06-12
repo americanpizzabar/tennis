@@ -51,8 +51,8 @@ export async function listCameras(): Promise<CameraDeviceInfo[]> {
       if (/back|rear|environment|背面/.test(lower)) facing = 'environment'
       else if (/front|user|face|前面/.test(lower)) facing = 'user'
       let hint: CameraDeviceInfo['hint'] = 'STANDARD'
-      // 「Back Triple Camera」「Back Dual Wide Camera」などの融合カメラ（0.5×可）を優先判定
-      if (/triple|dual/.test(lower)) hint = 'FUSED'
+      // 「Back Triple Camera」「背面トリプルカメラ」などの融合カメラ（0.5×可）を優先判定
+      if (/triple|dual|トリプル|デュアル/.test(lower)) hint = 'FUSED'
       else if (/ultra[\s-]?wide|超広角|0[.,]5x?/.test(lower)) hint = 'ULTRA_WIDE'
       else if (/tele|望遠|telephoto|[2-9]x|zoom/.test(lower)) hint = 'TELE'
       else if (/wide|広角/.test(lower)) hint = 'WIDE'

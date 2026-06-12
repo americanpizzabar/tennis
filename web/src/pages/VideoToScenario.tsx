@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   applyHomography, buildVideoToCourt, invertHomography,
 } from '../lib/homography'
+import { detectCourtFromVideo } from '../lib/courtDetector'
 import type { Mat3, Point2D } from '../lib/homography'
 import { TacticalBoard3D, CameraMode } from '../components/TacticalBoard3D'
 import type { BallKey, DangerZoneKey, PlayerKey, Scenario, TargetGateKey } from '../tactics/types'
@@ -176,10 +177,20 @@ export function VideoToScenarioPage() {
           {phase === 'CALIBRATE' && (
             <div className="space-y-2">
               <div className="bg-court-card rounded-xl p-3 text-xs">
-                <div className="text-court-warning font-bold mb-1">📐 コートの 4 隅をタップ</div>
+                <div className="text-court-warning font-bold mb-1">📐 コートの 4 隅（自動検出 → タップ修正可）</div>
                 順番：①左下 → ②左上 → ③右上 → ④右下（自陣→敵陣の順）<br />
                 やり直す場合はそのまま再度タップで初期化されます。
               </div>
+              <button onClick={() => {
+                const v = videoRef.current
+                if (!v) return
+                const det = detectCourtFromVideo(v)
+                if (det && det.confidence >= 0.25) setCorners(det.corners)
+                else alert('コートの自動検出に失敗しました。白線がよく見えるフレームで再試行するか、手動でタップしてください。')
+              }}
+                className="w-full bg-court-info text-white font-bold py-2 rounded-xl active:scale-95">
+                🤖 コートを自動検出
+              </button>
               {corners.length === 4 && H && (
                 <button onClick={proceedToMark}
                   className="w-full bg-green-700 text-white font-bold py-3 rounded-xl active:scale-95">

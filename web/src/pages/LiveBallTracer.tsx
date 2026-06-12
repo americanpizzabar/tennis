@@ -7,6 +7,7 @@ import {
 } from '../lib/liveBallTracker'
 import { useCameraDevice } from '../hooks/useCameraDevice'
 import { CameraToolbar } from '../components/CameraToolbar'
+import { detectCourtFromVideo } from '../lib/courtDetector'
 
 /**
  * フェーズ2：ライブカメラ即時弾道トレーサー。
@@ -43,6 +44,7 @@ export function LiveBallTracerPage() {
   const [courtType, setCourtType] = useState<'SINGLES' | 'DOUBLES'>('SINGLES')
   const [corners, setCorners] = useState<Point2D[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [autoDetectMsg, setAutoDetectMsg] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
   const [recordedBlob, setRecordedBlob] = useState<{ url: string; mime: string } | null>(null)
   const [trailMode, setTrailMode] = useState<'COMET' | 'FULL'>('COMET')
@@ -79,12 +81,39 @@ export function LiveBallTracerPage() {
     if (mr && mr.state !== 'inactive') { try { mr.stop() } catch { /* noop */ } }
   }, [])
 
-  // ── キャリブクリック ──
+  // ── コート自動検出 ──
+  const runAutoDetect = () => {
+    const v = videoRef.current
+    if (!v || v.readyState < 2) {
+      setAutoDetectMsg('⏳ カメラの準備を待っています…')
+      return
+    }
+    const det = detectCourtFromVideo(v)
+    if (det && det.confidence >= 0.25) {
+      setCorners(det.corners)
+      setAutoDetectMsg(`✅ コートを自動検出（信頼度 ${(det.confidence * 100).toFixed(0)}%）。ズレていればタップで修正。`)
+    } else {
+      setAutoDetectMsg('⚠️ 自動検出失敗。コート全体と白線が映る位置にカメラを調整するか、手動でタップしてください。')
+    }
+  }
+
+  // CALIBRATE に入って映像が安定したら自動検出をデフォルト実行
+  useEffect(() => {
+    if (phase !== 'CALIBRATE') return
+    const tid = window.setTimeout(() => {
+      if (corners.length === 0) runAutoDetect()
+    }, 1200)   // カメラの露出が安定するまで少し待つ
+    return () => clearTimeout(tid)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, cam.stream])
+
+  // ── キャリブクリック（手動修正） ──
   const onCalibClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (phase !== 'CALIBRATE') return
     const rect = e.currentTarget.getBoundingClientRect()
     const x = (e.clientX - rect.left) / rect.width
     const y = (e.clientY - rect.top) / rect.height
+    setAutoDetectMsg(null)
     setCorners(prev => prev.length < 4 ? [...prev, [x, y]] : [[x, y]])
   }
 
@@ -273,8 +302,17 @@ export function LiveBallTracerPage() {
               </button>
             </div>
           </div>
+          {autoDetectMsg && (
+            <div className={`rounded-lg px-3 py-2 text-xs ${autoDetectMsg.startsWith('✅') ? 'bg-emerald-900/50 text-emerald-200' : 'bg-yellow-900/50 text-yellow-200'}`}>
+              {autoDetectMsg}
+            </div>
+          )}
           <div className="flex gap-2">
-            <button onClick={() => setCorners([])}
+            <button onClick={runAutoDetect}
+              className="flex-1 bg-court-info text-white text-sm font-bold py-2 rounded-lg active:scale-95">
+              🤖 自動検出
+            </button>
+            <button onClick={() => { setCorners([]); setAutoDetectMsg(null) }}
               className="flex-1 bg-court-card text-court-danger text-sm font-bold py-2 rounded-lg">
               ↶ やり直し
             </button>
@@ -284,8 +322,8 @@ export function LiveBallTracerPage() {
             </button>
           </div>
           <div className="bg-blue-950/60 rounded-xl p-3 text-xs text-white/80 leading-relaxed">
-            💡 スマホを<b>三脚で固定</b>してください。コートの 4 隅が映る位置から後方撮影がベスト。
-            順番：①左下 → ②左上 → ③右上 → ④右下（自陣→敵陣）。
+            💡 スマホを<b>三脚で固定</b>してください。コートの 4 隅は白線から自動検出されます。
+            ズレている場合は ①左下 → ②左上 → ③右上 → ④右下 の順にタップで修正。
           </div>
         </div>
       )}

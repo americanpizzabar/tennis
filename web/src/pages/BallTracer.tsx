@@ -4,6 +4,7 @@ import type { Point2D } from '../lib/homography'
 import {
   trackVideo, phaseAt, type TrackResult, type BouncePoint,
 } from '../lib/ballTracker'
+import { detectCourtFromVideo } from '../lib/courtDetector'
 
 /**
  * テニス特化・弾道トレーサー（フェーズ1：動画解析）。
@@ -40,6 +41,8 @@ export function BallTracerPage() {
   const [playing, setPlaying] = useState(false)
   const [trailMode, setTrailMode] = useState<'FULL' | 'COMET'>('COMET')
 
+  const [autoDetectMsg, setAutoDetectMsg] = useState<string | null>(null)
+
   const videoRef = useRef<HTMLVideoElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const calibVideoRef = useRef<HTMLVideoElement>(null)
@@ -56,15 +59,49 @@ export function BallTracerPage() {
     setCorners([])
     setResult(null)
     setError(null)
+    setAutoDetectMsg(null)
     setPhase('CALIBRATE')
   }
   useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current) }, [])
 
-  // ── キャリブレーション クリック ──
+  // ── コート自動検出 ──
+  const runAutoDetect = () => {
+    const v = videoRef.current
+    if (!v || v.readyState < 2) {
+      setAutoDetectMsg('⏳ 動画の読み込みを待っています…')
+      return
+    }
+    const det = detectCourtFromVideo(v)
+    if (det && det.confidence >= 0.25) {
+      setCorners(det.corners)
+      setAutoDetectMsg(`✅ コートを自動検出しました（信頼度 ${(det.confidence * 100).toFixed(0)}%）。ズレている場合はタップで修正できます。`)
+    } else {
+      setAutoDetectMsg('⚠️ 自動検出できませんでした。コート全体と白線が見えるフレームで再試行するか、手動で 4 隅をタップしてください。')
+    }
+  }
+
+  // CALIBRATE に入ったら自動検出をデフォルト実行
+  useEffect(() => {
+    if (phase !== 'CALIBRATE') return
+    const v = videoRef.current
+    if (!v) return
+    const tryDetect = () => { runAutoDetect() }
+    if (v.readyState >= 2) {
+      // 最初のフレームが描画できる状態
+      tryDetect()
+    } else {
+      v.addEventListener('loadeddata', tryDetect, { once: true })
+      return () => v.removeEventListener('loadeddata', tryDetect)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, videoUrl])
+
+  // ── キャリブレーション クリック（手動修正） ──
   const onCalibClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
     const x = (e.clientX - rect.left) / rect.width
     const y = (e.clientY - rect.top) / rect.height
+    setAutoDetectMsg(null)
     setCorners(prev => prev.length < 4 ? [...prev, [x, y]] : [[x, y]])
   }
 
@@ -171,13 +208,18 @@ export function BallTracerPage() {
             </div>
           </div>
 
-          <div className="text-sm font-bold text-court-warning">📐 コートの 4 隅をタップ</div>
+          <div className="text-sm font-bold text-court-warning">📐 コートの 4 隅（自動検出 → タップで修正可）</div>
+          {autoDetectMsg && (
+            <div className={`rounded-lg px-3 py-2 text-xs ${autoDetectMsg.startsWith('✅') ? 'bg-emerald-900/50 text-emerald-200' : 'bg-yellow-900/50 text-yellow-200'}`}>
+              {autoDetectMsg}
+            </div>
+          )}
           <div className="relative bg-black rounded-xl overflow-hidden aspect-video cursor-crosshair"
             onClick={onCalibClick}>
             <video ref={videoRef} src={videoUrl} playsInline muted controls
               className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
             <CornerOverlay corners={corners} />
-            {corners.length < 4 && (
+            {corners.length > 0 && corners.length < 4 && (
               <div className="absolute top-2 left-2 right-2 bg-yellow-900/70 rounded px-2 py-1 text-xs text-court-warning">
                 ⚠️ 「{CORNER_LABELS[corners.length]}」をタップ（{corners.length + 1}/4）
               </div>
@@ -185,9 +227,13 @@ export function BallTracerPage() {
           </div>
           {/* 解析用の隠し video（再生走査に使う、calib と別参照にすると面倒なので同一を使う） */}
           <div className="flex gap-2">
-            <button onClick={() => setCorners([])}
+            <button onClick={runAutoDetect}
+              className="flex-1 bg-court-info text-white text-sm font-bold py-2 rounded-lg active:scale-95">
+              🤖 自動検出
+            </button>
+            <button onClick={() => { setCorners([]); setAutoDetectMsg(null) }}
               className="flex-1 bg-court-card text-court-danger text-sm font-bold py-2 rounded-lg">
-              ↶ やり直し
+              ↶ 手動でやり直し
             </button>
             <button onClick={startAnalysis} disabled={corners.length !== 4}
               className="flex-1 bg-green-700 disabled:bg-gray-700 text-white text-sm font-bold py-2 rounded-lg active:scale-95">
@@ -195,8 +241,9 @@ export function BallTracerPage() {
             </button>
           </div>
           <div className="bg-blue-950/60 rounded-xl p-3 text-xs text-white/80 leading-relaxed">
-            💡 動画を一時停止し、コートの 4 隅がよく見えるフレームでタップしてください。
-            順番：①左下 → ②左上 → ③右上 → ④右下（自陣→敵陣）。
+            💡 コートの 4 隅は白線から自動検出されます。ズレている場合は動画を一時停止し、
+            ①左下 → ②左上 → ③右上 → ④右下 の順にタップして修正してください。
+            別のフレームで「🤖 自動検出」を再実行することもできます。
           </div>
           <video ref={calibVideoRef} className="hidden" />
         </div>

@@ -14,6 +14,7 @@ import {
 import { TacticalBoard3D } from '../components/TacticalBoard3D'
 import type { BallKey, Scenario } from '../tactics/types'
 import { detectBallInFrame } from '../lib/ballDetector'
+import { detectCourtFromVideo } from '../lib/courtDetector'
 import { computeShotMetrics, SPIN_LABEL, type ShotMetric } from '../lib/ballMechanics'
 import { buildCausalReport, type CausalReport } from '../lib/causalAnalysis'
 import { detectVideoFrame, warmupPoseModel } from '../lib/poseDetector'
@@ -438,6 +439,17 @@ export function SyncTrajectoryPage() {
           onReset={() => setBackCorners([])}
           onNext={() => setPhase(sideCorners.length === 4 ? 'TAG' : 'CALIBRATE_SIDE')}
           done={backCorners.length === 4}
+          onAuto={() => {
+            const v = backRef.current
+            if (!v) return
+            const det = detectCourtFromVideo(v)
+            if (det && det.confidence >= 0.25) {
+              setBackCorners(det.corners)
+              saveCalibration({ back: det.corners, side: sideCorners.length === 4 ? sideCorners : undefined, courtType })
+            } else {
+              setError('コートの自動検出に失敗しました。白線がよく見えるフレームで再試行するか、手動でタップしてください。')
+            }
+          }}
         />
       )}
 
@@ -448,6 +460,17 @@ export function SyncTrajectoryPage() {
           onReset={() => setSideCorners([])}
           onNext={() => setPhase('TAG')}
           done={sideCorners.length === 4}
+          onAuto={() => {
+            const v = sideRef.current
+            if (!v) return
+            const det = detectCourtFromVideo(v)
+            if (det && det.confidence >= 0.25) {
+              setSideCorners(det.corners)
+              saveCalibration({ back: backCorners.length === 4 ? backCorners : undefined, side: det.corners, courtType })
+            } else {
+              setError('コートの自動検出に失敗しました。白線がよく見えるフレームで再試行するか、手動でタップしてください。')
+            }
+          }}
         />
       )}
 
@@ -507,7 +530,7 @@ export function SyncTrajectoryPage() {
 }
 
 // ── サブコンポーネント ──────────────────────────────────
-function CalibratePane({ label, videoRef, corners, onClick, onReset, onNext, done }: {
+function CalibratePane({ label, videoRef, corners, onClick, onReset, onNext, done, onAuto }: {
   label: string
   videoRef: React.RefObject<HTMLVideoElement>
   corners: Point2D[]
@@ -515,10 +538,11 @@ function CalibratePane({ label, videoRef, corners, onClick, onReset, onNext, don
   onReset: () => void
   onNext: () => void
   done: boolean
+  onAuto?: () => void
 }) {
   return (
     <div className="space-y-3">
-      <div className="text-sm font-bold text-court-warning">📐 {label} の 4 隅をタップ</div>
+      <div className="text-sm font-bold text-court-warning">📐 {label} の 4 隅（自動検出 → タップ修正可）</div>
       <div className="relative bg-black rounded-xl overflow-hidden aspect-video cursor-crosshair"
         onClick={onClick}>
         <video ref={videoRef} playsInline muted controls
@@ -531,6 +555,12 @@ function CalibratePane({ label, videoRef, corners, onClick, onReset, onNext, don
         )}
       </div>
       <div className="flex gap-2">
+        {onAuto && (
+          <button onClick={onAuto}
+            className="flex-1 bg-court-info text-white text-sm font-bold py-2 rounded-lg active:scale-95">
+            🤖 自動検出
+          </button>
+        )}
         <button onClick={onReset}
           className="flex-1 bg-court-card text-court-danger text-sm font-bold py-2 rounded-lg">
           ↶ やり直し

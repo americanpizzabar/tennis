@@ -128,10 +128,22 @@ export function useCameraDevice(
 
   const selectPreset = useCallback(async (level: number) => {
     setCurrentPreset(level)
+    // ① まず「現在のカメラのハードウェアズーム」で到達できるか確認。
+    //    Android の多くは超広角を別カメラではなく zoom min=0.5 として公開するため、
+    //    カメラ切替なしで 0.5× に到達できるケースが最多。
+    if (zoomCap.supported && level >= zoomCap.min - 1e-6 && level <= zoomCap.max + 1e-6) {
+      const ok = await applyHardwareZoom(streamRef.current, level)
+      if (ok) {
+        setZoomCap(c => ({ ...c, current: level }))
+        setDigitalZoom(1)
+        return
+      }
+    }
+    // ② カメラ切替プラン（iOS の Ultra Wide / Triple Camera など）
     const plan = planLogicalZoom(level, cameras)
     if (!plan) {
-      // フォールバック：今のカメラのまま CSS デジタル
-      setDigitalZoom(level)
+      // フォールバック：今のカメラのまま CSS デジタル（縮小 0.5× は不可能なので 1 未満は無視）
+      if (level >= 1) setDigitalZoom(level)
       return
     }
     // 必要なら別カメラに切替
@@ -144,14 +156,14 @@ export function useCameraDevice(
       if (ok) {
         setZoomCap(c => ({ ...c, current: plan.hardwareZoom! }))
         setDigitalZoom(1)
-      } else {
-        // ハード非対応 → CSS で代替
+      } else if (level >= 1) {
+        // ハード非対応 → CSS で代替（拡大のみ）
         setDigitalZoom(level)
       }
     } else {
       setDigitalZoom(1)
     }
-  }, [cameras, activeDeviceId, open])
+  }, [cameras, activeDeviceId, open, zoomCap])
 
   const setZoom = useCallback(async (z: number) => {
     if (zoomCap.supported) {
@@ -183,9 +195,12 @@ export function useCameraDevice(
 }
 
 function computeAvailablePresets(cams: CameraDeviceInfo[], cap: ZoomCapability): number[] {
-  if (cams.length === 0) {
-    // カメラ列挙できない場合（ラベルが取れない）。ハード zoom だけで判断。
-    return PRESET_LEVELS.filter(z => z >= cap.min && z <= cap.max)
-  }
-  return PRESET_LEVELS.filter(z => planLogicalZoom(z, cams) !== null)
+  return PRESET_LEVELS.filter(z => {
+    // ① 現在のカメラのハードウェアズーム範囲内なら OK（Android の 0.5× はここで通る）
+    if (cap.supported && z >= cap.min - 1e-6 && z <= cap.max + 1e-6) return true
+    // ② 別カメラへの切替プランがあれば OK（iOS の Ultra Wide 等）
+    if (cams.length > 0 && planLogicalZoom(z, cams) !== null) return true
+    // ③ 1× 以上は CSS デジタルでも実現できる（0.5× は CSS では不可能）
+    return z >= 1
+  })
 }
