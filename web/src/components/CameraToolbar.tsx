@@ -25,8 +25,9 @@ export function CameraToolbar({ cam, disabled, compact }: {
 
   const hardwareSupported = cam.zoomCap.supported
   const sliderZoom = hardwareSupported ? cam.zoomCap.current : cam.digitalZoom
-  const sliderMin = hardwareSupported ? cam.zoomCap.min : 1
-  const sliderMax = hardwareSupported ? cam.zoomCap.max : 3
+  // ハード未報告でも 0.5 → 5 のレンジを使えるように
+  const sliderMin = hardwareSupported ? Math.min(cam.zoomCap.min, 0.5) : 0.5
+  const sliderMax = hardwareSupported ? Math.max(cam.zoomCap.max, 5) : 5
   const sliderStep = hardwareSupported ? cam.zoomCap.step : 0.1
 
   return (

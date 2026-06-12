@@ -94,27 +94,54 @@ export function backCameras(cams: CameraDeviceInfo[]): CameraDeviceInfo[] {
   return back.sort((a, b) => order.indexOf(a.hint) - order.indexOf(b.hint))
 }
 
-/** カメラを起動する標準パターン。deviceId 指定があれば優先。 */
+/**
+ * カメラを起動する標準パターン。deviceId 指定があれば優先。
+ *
+ * Chrome Android では `pan/tilt/zoom: true` を制約に入れて **PTZ 権限を要求**
+ * しないと、`getCapabilities().zoom` が空のまま返ってくる（Pixel で 0.5× が
+ * 見えなかった主因）。本関数は常に PTZ を要求する。
+ */
 export async function openCamera(opts: {
   deviceId?: string
   facingMode?: 'environment' | 'user'
   audio?: boolean
   width?: number
   height?: number
+  /** 初期ハードウェアズーム要求（Pixel 等で 0.5× を一発で取りに行く）。 */
+  initialZoom?: number
 }): Promise<MediaStream> {
-  const videoConstraints: MediaTrackConstraints = {
+  const videoConstraints: any = {
     width: { ideal: opts.width ?? 1280 },
     height: { ideal: opts.height ?? 720 },
+    // PTZ 権限を要求 → zoom 能力が capabilities に現れるようになる
+    pan: true,
+    tilt: true,
+    zoom: true,
   }
   if (opts.deviceId) {
     videoConstraints.deviceId = { exact: opts.deviceId }
   } else if (opts.facingMode) {
     videoConstraints.facingMode = opts.facingMode
   }
-  return navigator.mediaDevices.getUserMedia({
-    video: videoConstraints,
-    audio: opts.audio ?? false,
-  })
+  if (opts.initialZoom != null) {
+    videoConstraints.advanced = [{ zoom: opts.initialZoom }]
+  }
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      video: videoConstraints,
+      audio: opts.audio ?? false,
+    })
+  } catch (e) {
+    // PTZ 拒否や非対応端末向けフォールバック：pan/tilt/zoom を外して再試行
+    delete videoConstraints.pan
+    delete videoConstraints.tilt
+    delete videoConstraints.zoom
+    delete videoConstraints.advanced
+    return navigator.mediaDevices.getUserMedia({
+      video: videoConstraints,
+      audio: opts.audio ?? false,
+    })
+  }
 }
 
 /** トラックのズーム能力を取得（非対応なら supported:false）。 */

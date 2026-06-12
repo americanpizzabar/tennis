@@ -92,7 +92,7 @@ export function useCameraDevice(
   }, [])
 
   // 起動／切替の共通ロジック
-  const open = useCallback(async (deviceId?: string) => {
+  const open = useCallback(async (deviceId?: string, initialZoom?: number) => {
     setError(null)
     try {
       // 既存ストリーム停止
@@ -104,6 +104,7 @@ export function useCameraDevice(
         audio: opts.audio ?? false,
         width: opts.width ?? 1280,
         height: opts.height ?? 720,
+        initialZoom,
       })
       attach(newStream)
       setDigitalZoom(1)
@@ -197,19 +198,29 @@ export function useCameraDevice(
       }
       return
     }
-    // ③ 0.5× の発見モード：Pixel 等は超広角が「無名の別カメラ」。
-    //    タップごとに次の背面カメラへ巡回し、ユーザが画角で確認する。
-    //    切替後に zoom 範囲を実測キャッシュするので、対応カメラなら次回から自動。
+    // ③ 0.5× の積極アプローチ：
+    //    (a) まず「現在のカメラを zoom:0.5 を初期制約で再オープン」。
+    //        Pixel 等は applyConstraints では拒否されても初期制約なら通ることがある。
+    //    (b) ダメなら次の背面カメラへ巡回（Pixel の超広角は別 deviceId）。
     if (level < 1) {
+      // (a) 現在カメラを 0.5 zoom 制約で再オープン
+      try {
+        await open(activeDeviceId, 0.5)
+        const cap = refreshZoomCap(activeDeviceId)
+        if (cap.supported && cap.min < 1 && (cap.current ?? 1) < 1) {
+          setPresetNote('✅ 0.5× に切替えました。')
+          return
+        }
+      } catch { /* fallthrough to (b) */ }
+      // (b) 次の背面カメラへ巡回
       const others = cameras.filter(c => c.deviceId !== activeDeviceId)
       if (others.length === 0) {
-        setPresetNote('この端末では超広角カメラを検出できませんでした。')
+        setPresetNote('⚠️ この端末では Web から 0.5× を取得できませんでした。Chrome のアドレスバーを長押し → サイト設定 → カメラ で「許可」になっているか確認してください。')
         return
       }
       const idx = discoverIdxRef.current % others.length
       discoverIdxRef.current++
-      const newId = await open(others[idx].deviceId)
-      // 開いた後に 0.5 を試す（実測値が遅延 populate される場合に備え再試行つき）
+      const newId = await open(others[idx].deviceId, 0.5)
       window.setTimeout(async () => {
         const cap = refreshZoomCap(newId)
         if (cap.supported && cap.min < 1) {
@@ -256,14 +267,12 @@ export function useCameraDevice(
 }
 
 function computeAvailablePresets(cams: CameraDeviceInfo[], cap: ZoomCapability): number[] {
-  return PRESET_LEVELS.filter(z => {
-    // ① 現在のカメラのハードウェアズーム範囲内なら OK（Android の 0.5× はここで通る）
-    if (cap.supported && z >= cap.min - 1e-6 && z <= cap.max + 1e-6) return true
-    // ② 別カメラへの切替プランがあれば OK（iOS の Ultra Wide / 実測キャッシュ済み）
-    if (cams.length > 0 && planLogicalZoom(z, cams) !== null) return true
-    // ③ 0.5× は「発見モード」が使えるので、背面カメラが 2 台以上あれば有効
-    if (z < 1) return cams.length >= 2
-    // ④ 1× 以上は CSS デジタルでも実現できる
-    return true
-  })
+  void cams; void cap
+  // ボタンは常に押せるようにする。
+  // クリックすると useCameraDevice.selectPreset が 3 段階で実現を試みる：
+  //   ① 現在のカメラの applyConstraints({ zoom })
+  //   ② 現在のカメラを zoom 初期制約付きで再オープン（PTZ 許可後に有効化されるケース）
+  //   ③ 別の背面カメラに巡回（Pixel の超広角は別 deviceId）
+  // 真の非対応はクリック後の presetNote でユーザにフィードバックする。
+  return PRESET_LEVELS.slice()
 }
