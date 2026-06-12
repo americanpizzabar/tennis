@@ -99,6 +99,13 @@ export function HomePage() {
           emoji="☄️"
           onClick={() => nav('/ball-tracer')}
         />
+        <ActionRow
+          title="ライブ弾道トレーサー"
+          subtitle="三脚固定でカメラプレビューにリアルタイム弾道を即時描画"
+          emoji="⚡"
+          badge="LIVE"
+          onClick={() => nav('/ball-tracer/live')}
+        />
       </Section>
 
       {/* ── ③ 戦術・戦略 ── */}

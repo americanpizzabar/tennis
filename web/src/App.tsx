@@ -18,6 +18,7 @@ import { SyncReplayPage } from './pages/SyncReplay'
 import { SyncTrajectoryPage } from './pages/SyncTrajectory'
 import { ProAnalyticsPage } from './pages/ProAnalytics'
 import { BallTracerPage } from './pages/BallTracer'
+import { LiveBallTracerPage } from './pages/LiveBallTracer'
 
 // SPA リライトに対応するホスティング（Vercel / Netlify / Cloudflare 等）では
 // BrowserRouter を使うとクリーン URL になる。`file://` で開く or 任意の静的サーバで
@@ -44,6 +45,7 @@ export function App() {
         <Route path="/plan/:opponentId" element={<GamePlanPage />} />
         <Route path="/video-to-3d" element={<VideoToScenarioPage />} />
         <Route path="/ball-tracer" element={<BallTracerPage />} />
+        <Route path="/ball-tracer/live" element={<LiveBallTracerPage />} />
         <Route path="/sync" element={<SyncListPage />} />
         <Route path="/sync/new" element={<SyncCapturePage />} />
         <Route path="/sync/:id" element={<SyncReplayPage />} />
