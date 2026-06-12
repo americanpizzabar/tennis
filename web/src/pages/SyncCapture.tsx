@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  SyncSession, type Role, type CameraRole, type ConnState, type ReceivedVideo,
+  SyncSession, generatePin, type Role, type CameraRole, type ConnState, type ReceivedVideo,
 } from '../lib/syncSession'
 import { saveSyncSession } from '../lib/db'
 import type { SyncClip, SyncSessionRecord } from '../types/sync'
-import { encodeToQRFrames, createQrScanner } from '../lib/qrPair'
 
 function pickVideoMime(): string {
   const candidates = [
@@ -28,8 +27,10 @@ const CAMERA_LABEL: Record<CameraRole, string> = {
 
 type Step =
   | 'PICK_ROLE'
-  | 'HOST_OFFER'        // offer 表示→answer 待ち
-  | 'GUEST_OFFER_IN'    // offer 入力→answer 表示
+  | 'HOST_PIN'          // 親機：PIN 表示→子機接続待ち
+  | 'GUEST_PIN_IN'      // 子機：PIN 入力→接続
+  | 'HOST_OFFER'        // フォールバック：offer 表示→answer 待ち
+  | 'GUEST_OFFER_IN'    // フォールバック：offer 入力→answer 表示
   | 'LOBBY'             // 接続済み・録画前
   | 'RECORDING'
   | 'TRANSFER'          // 動画交換中
@@ -43,7 +44,11 @@ export function SyncCapturePage() {
   const [connState, setConnState] = useState<ConnState>('IDLE')
   const [error, setError] = useState<string | null>(null)
 
-  // シグナリングコード
+  // PIN ペアリング
+  const [hostPin, setHostPin] = useState('')
+  const [pinInput, setPinInput] = useState('')
+
+  // 手動コード（フォールバック）
   const [offerCode, setOfferCode] = useState('')
   const [answerCode, setAnswerCode] = useState('')
   const [pasteCode, setPasteCode] = useState('')
@@ -117,9 +122,47 @@ export function SyncCapturePage() {
     return s
   }
 
-  // ── ロール選択 ──
+  // ── ロール選択（PIN モード：推奨） ──
+  /** 衝突したら PIN を作り直して再試行。 */
   const chooseHost = async () => {
     setRole('HOST'); setMyCamera('BACK'); setError(null)
+    const s = buildSession('HOST')
+    setStep('HOST_PIN')
+    // PIN を 1〜3 回ランダム生成して待ち受け。衝突したら次の PIN で再試行。
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const pin = generatePin()
+      try {
+        await s.hostWithPin(pin)
+        setHostPin(pin)
+        return
+      } catch (e: any) {
+        if (attempt === 2) {
+          setError('待ち受けに失敗：ネットワークを確認してください（PIN: ' + pin + '）')
+        }
+      }
+    }
+  }
+  const chooseGuest = () => {
+    setRole('GUEST'); setMyCamera('SIDE'); setError(null)
+    buildSession('GUEST')
+    setStep('GUEST_PIN_IN')
+  }
+
+  const submitGuestPin = async () => {
+    if (pinInput.length !== 4) { setError('4 桁の PIN を入力してください'); return }
+    setError(null)
+    try {
+      await sessionRef.current!.joinWithPin(pinInput)
+      // 接続成功は onState で LOBBY に遷移
+    } catch (e: any) {
+      setError('接続失敗：PIN が違うか、相手が待ち受けていません（' + (e?.message ?? String(e)) + '）')
+    }
+  }
+
+  // ── フォールバック：手動コード ──
+  const switchToManualHost = async () => {
+    sessionRef.current?.close()
+    setError(null)
     const s = buildSession('HOST')
     try {
       const code = await s.createOffer()
@@ -129,8 +172,9 @@ export function SyncCapturePage() {
       setError('offer 生成に失敗：' + (e?.message ?? String(e)))
     }
   }
-  const chooseGuest = () => {
-    setRole('GUEST'); setMyCamera('SIDE'); setError(null)
+  const switchToManualGuest = () => {
+    sessionRef.current?.close()
+    setError(null)
     buildSession('GUEST')
     setStep('GUEST_OFFER_IN')
   }
@@ -159,12 +203,19 @@ export function SyncCapturePage() {
     }
   }
 
-  // 接続完了 → LOBBY へ（GUEST 側）
+  // 接続完了 → LOBBY へ（HOST／GUEST 両側、PIN／手動モード共通）
   useEffect(() => {
-    if (connState === 'CONNECTED' && (step === 'GUEST_OFFER_IN' || step === 'HOST_OFFER')) {
+    if (connState === 'CONNECTED' && (
+      step === 'GUEST_OFFER_IN' || step === 'HOST_OFFER' ||
+      step === 'HOST_PIN' || step === 'GUEST_PIN_IN'
+    )) {
+      // HOST 側は接続が確定したら GUEST にカメラ役割を通知
+      if (role === 'HOST') {
+        sessionRef.current?.assignGuestCamera(myCamera === 'BACK' ? 'SIDE' : 'BACK')
+      }
       setStep('LOBBY')
     }
-  }, [connState, step])
+  }, [connState, step, role, myCamera])
 
   // ── 録画スケジューリング（両端末で同一の壁時計時刻に開始） ──
   const scheduleRecording = (hostAtEpoch: number) => {
@@ -296,17 +347,28 @@ export function SyncCapturePage() {
         <RolePicker onHost={chooseHost} onGuest={chooseGuest} />
       )}
 
+      {step === 'HOST_PIN' && (
+        <HostPinPanel
+          pin={hostPin}
+          connState={connState}
+          onUseManual={switchToManualHost}
+        />
+      )}
+
+      {step === 'GUEST_PIN_IN' && (
+        <GuestPinPanel
+          pin={pinInput} setPin={setPinInput}
+          connState={connState}
+          onConnect={submitGuestPin}
+          onUseManual={switchToManualGuest}
+        />
+      )}
+
       {step === 'HOST_OFFER' && (
         <HostPairing
           offerCode={offerCode}
           pasteCode={pasteCode} setPasteCode={setPasteCode}
           onSubmitAnswer={submitAnswer}
-          onScannedAnswer={async (decoded) => {
-            setPasteCode(decoded)
-            try { await sessionRef.current!.acceptAnswer(decoded); setStep('LOBBY') } catch {
-              setError('応答コードの適用に失敗しました')
-            }
-          }}
         />
       )}
 
@@ -315,14 +377,6 @@ export function SyncCapturePage() {
           answerCode={answerCode}
           pasteCode={pasteCode} setPasteCode={setPasteCode}
           onSubmitOffer={submitOffer}
-          onScannedOffer={async (decoded) => {
-            try {
-              const ans = await sessionRef.current!.createAnswer(decoded)
-              setAnswerCode(ans)
-            } catch {
-              setError('接続コードの処理に失敗しました')
-            }
-          }}
         />
       )}
 
@@ -408,8 +462,8 @@ function RolePicker({ onHost, onGuest }: { onHost: () => void; onGuest: () => vo
       <Info>
         2 台のスマホを連動させます。<b>1 台で「親機（後方）」</b>を選び、
         もう 1 台で<b>「子機（サイド）」</b>を選んでください。<br />
-        📷 接続は <b>QR を見せ合うだけ</b>で完了します（手動コード貼付も選択可）。<br />
-        ※ 同じ Wi-Fi に繋ぐと最も安定します（モバイル回線でも可）。
+        🔢 親機に表示される <b>4 桁の PIN を子機に入力するだけ</b>で接続完了！<br />
+        ※ どちらの端末にも、各自の操作画面が出ます。
       </Info>
       <button onClick={onHost}
         className="w-full bg-court-card hover:bg-emerald-900 rounded-xl p-4 flex items-center gap-3 transition active:scale-[0.98] text-left">
@@ -557,192 +611,158 @@ function ProgressBar({ label, ratio }: { label: string; ratio: number }) {
   )
 }
 
-// ── QR ペアリング（推奨フロー） ──────────────────────
-type PairMode = 'QR' | 'MANUAL'
+// ════════════════════════════════════════════════════════
+// ① PIN ペアリング（推奨）
+// ════════════════════════════════════════════════════════
+
+/** 親機：自分の PIN を巨大表示して子機が入力するのを待つ。 */
+function HostPinPanel({ pin, connState, onUseManual }: {
+  pin: string; connState: ConnState; onUseManual: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <Info>
+        この PIN を <b>子機（サイド）</b> に入力してもらうと、自動で接続します。<br />
+        Bluetooth ペアリングと同じ感覚で、番号 1 つで繋がります。
+      </Info>
+      <div className="bg-court-card rounded-xl p-6 text-center space-y-3">
+        <div className="text-xs text-gray-400">子機に入力する PIN</div>
+        {pin ? (
+          <div className="text-6xl font-black tracking-[0.4em] text-court-accent select-all">
+            {pin.split('').map((c, i) => <span key={i}>{c}</span>)}
+          </div>
+        ) : (
+          <div className="text-court-warning text-sm">⏳ サーバに登録中…</div>
+        )}
+        <div className="text-xs text-gray-400">
+          {connState === 'CONNECTED'
+            ? '✅ 接続成功！'
+            : connState === 'WAITING_ANSWER'
+            ? '📡 子機からの接続を待っています…'
+            : '準備中…'}
+        </div>
+      </div>
+      <button onClick={onUseManual}
+        className="w-full text-xs text-gray-400 underline py-2">
+        サーバが使えない場合：手動コード交換に切替
+      </button>
+    </div>
+  )
+}
+
+/** 子機：PIN を数字パッドで入力 → 接続。 */
+function GuestPinPanel({ pin, setPin, connState, onConnect, onUseManual }: {
+  pin: string; setPin: (s: string) => void;
+  connState: ConnState; onConnect: () => void; onUseManual: () => void;
+}) {
+  const tap = (d: string) => {
+    if (pin.length >= 4) return
+    setPin(pin + d)
+  }
+  const back = () => setPin(pin.slice(0, -1))
+  return (
+    <div className="space-y-3">
+      <Info>
+        <b>親機（後方）</b> の画面に表示されている 4 桁の PIN を入力してください。
+      </Info>
+      <div className="bg-court-card rounded-xl p-4 space-y-3">
+        <div className="text-xs text-gray-400 text-center">親機の PIN</div>
+        <div className="flex justify-center gap-2">
+          {[0, 1, 2, 3].map(i => (
+            <div key={i}
+              className={`w-14 h-16 rounded-lg flex items-center justify-center text-3xl font-black ${
+                pin[i] ? 'bg-court-accent text-white' : 'bg-court-surface text-gray-600'
+              }`}>
+              {pin[i] ?? '·'}
+            </div>
+          ))}
+        </div>
+        {/* 数字パッド */}
+        <div className="grid grid-cols-3 gap-2 max-w-[260px] mx-auto">
+          {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(d => (
+            <button key={d} onClick={() => tap(d)}
+              className="aspect-square bg-court-surface text-white text-2xl font-bold rounded-lg active:scale-95 transition">
+              {d}
+            </button>
+          ))}
+          <button onClick={back}
+            className="aspect-square bg-court-surface text-court-warning text-2xl rounded-lg active:scale-95 transition">
+            ⌫
+          </button>
+          <button onClick={() => tap('0')}
+            className="aspect-square bg-court-surface text-white text-2xl font-bold rounded-lg active:scale-95 transition">
+            0
+          </button>
+          <button onClick={() => setPin('')}
+            className="aspect-square bg-court-surface text-court-danger text-xs font-bold rounded-lg active:scale-95 transition">
+            クリア
+          </button>
+        </div>
+        <button onClick={onConnect}
+          disabled={pin.length !== 4 || connState === 'CONNECTING'}
+          className="w-full bg-green-700 disabled:bg-gray-700 text-white font-bold py-3 rounded-xl active:scale-95 transition">
+          {connState === 'CONNECTING' ? '📡 接続中…' : '🔗 接続する'}
+        </button>
+      </div>
+      <button onClick={onUseManual}
+        className="w-full text-xs text-gray-400 underline py-2">
+        サーバが使えない場合：手動コード交換に切替
+      </button>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════
+// ② 手動コード（フォールバック）
+// ════════════════════════════════════════════════════════
 
 function HostPairing({
-  offerCode, pasteCode, setPasteCode, onSubmitAnswer, onScannedAnswer,
+  offerCode, pasteCode, setPasteCode, onSubmitAnswer,
 }: {
   offerCode: string
   pasteCode: string; setPasteCode: (s: string) => void
   onSubmitAnswer: () => void
-  onScannedAnswer: (decoded: string) => void
 }) {
-  const [mode, setMode] = useState<PairMode>('QR')
   return (
     <div className="space-y-3">
-      <ModeTabs mode={mode} setMode={setMode} />
-      {mode === 'QR' ? (
-        <>
-          <Info>
-            ① <b>子機（サイド）</b> のカメラでこの QR を映してください。<br />
-            ② 子機の画面に出た QR をこの端末で読み取って接続完了！
-          </Info>
-          <QrShow label="① 接続用 QR（子機が読み取る）" payload={offerCode} />
-          <QrScan label="② 子機の応答 QR を読み取る" onDecoded={onScannedAnswer} />
-        </>
-      ) : (
-        <>
-          <Info>
-            QR が使えない場合のフォールバック：コードをメッセージ等で交換します。<br />
-            ① このコードを子機に送信 → ② 子機が出した応答コードを貼り付け。
-          </Info>
-          <CodeBox label="① 接続コード（子機へ送る）" value={offerCode} />
-          <PasteBox
-            label="② 子機からの応答コードを貼り付け"
-            value={pasteCode} onChange={setPasteCode} onSubmit={onSubmitAnswer}
-            submitLabel="接続する"
-          />
-        </>
-      )}
+      <Info>
+        <b>手動コード交換モード</b>（PIN モードが使えない場合のフォールバック）<br />
+        ① このコードを子機に送信 → ② 子機が出した応答コードを貼り付け。
+      </Info>
+      <CodeBox label="① 接続コード（子機へ送る）" value={offerCode} />
+      <PasteBox
+        label="② 子機からの応答コードを貼り付け"
+        value={pasteCode} onChange={setPasteCode} onSubmit={onSubmitAnswer}
+        submitLabel="接続する"
+      />
     </div>
   )
 }
 
 function GuestPairing({
-  answerCode, pasteCode, setPasteCode, onSubmitOffer, onScannedOffer,
+  answerCode, pasteCode, setPasteCode, onSubmitOffer,
 }: {
   answerCode: string
   pasteCode: string; setPasteCode: (s: string) => void
   onSubmitOffer: () => void
-  onScannedOffer: (decoded: string) => void
 }) {
-  const [mode, setMode] = useState<PairMode>('QR')
   return (
     <div className="space-y-3">
-      <ModeTabs mode={mode} setMode={setMode} />
-      {mode === 'QR' ? (
-        <>
-          <Info>
-            ① <b>親機（後方）</b> のカメラに表示された QR をこの端末で読み取ります。<br />
-            ② 自動生成される応答 QR を親機のカメラに映せば接続完了！
-          </Info>
-          {!answerCode ? (
-            <QrScan label="① 親機の QR を読み取る" onDecoded={onScannedOffer} />
-          ) : (
-            <>
-              <QrShow label="② 応答用 QR（親機が読み取る）" payload={answerCode} />
-              <div className="text-center text-xs text-gray-400">親機が読み取ると自動で次に進みます…</div>
-            </>
-          )}
-        </>
+      <Info>
+        <b>手動コード交換モード</b>：コードを貼り付け→生成→送信。
+      </Info>
+      {!answerCode ? (
+        <PasteBox
+          label="① 親機の接続コードを貼り付け"
+          value={pasteCode} onChange={setPasteCode} onSubmit={onSubmitOffer}
+          submitLabel="応答コードを生成"
+        />
       ) : (
         <>
-          <Info>
-            QR が使えない場合のフォールバック：コードを貼り付け→生成→送信。
-          </Info>
-          {!answerCode ? (
-            <PasteBox
-              label="① 親機の接続コードを貼り付け"
-              value={pasteCode} onChange={setPasteCode} onSubmit={onSubmitOffer}
-              submitLabel="応答コードを生成"
-            />
-          ) : (
-            <>
-              <CodeBox label="② 応答コード（親機へ返す）" value={answerCode} />
-              <div className="text-center text-xs text-gray-400">親機が接続すると自動で次に進みます…</div>
-            </>
-          )}
+          <CodeBox label="② 応答コード（親機へ返す）" value={answerCode} />
+          <div className="text-center text-xs text-gray-400">親機が接続すると自動で次に進みます…</div>
         </>
       )}
-    </div>
-  )
-}
-
-function ModeTabs({ mode, setMode }: { mode: PairMode; setMode: (m: PairMode) => void }) {
-  return (
-    <div className="grid grid-cols-2 gap-1 bg-court-card rounded-xl p-1">
-      <button onClick={() => setMode('QR')}
-        className={`py-2 rounded text-xs font-bold ${mode === 'QR' ? 'bg-court-accent text-white' : 'text-gray-300'}`}>
-        📷 QR コード（推奨）
-      </button>
-      <button onClick={() => setMode('MANUAL')}
-        className={`py-2 rounded text-xs font-bold ${mode === 'MANUAL' ? 'bg-court-accent text-white' : 'text-gray-300'}`}>
-        ⌨️ コード貼付（手動）
-      </button>
-    </div>
-  )
-}
-
-/** QR を表示（マルチパートならアニメ）。 */
-function QrShow({ label, payload }: { label: string; payload: string }) {
-  const [frames, setFrames] = useState<string[]>([])
-  const [idx, setIdx] = useState(0)
-  useEffect(() => {
-    let cancelled = false
-    encodeToQRFrames(payload).then(f => { if (!cancelled) { setFrames(f); setIdx(0) } })
-    return () => { cancelled = true }
-  }, [payload])
-  // マルチパートはローテーション（読み取り側がじっくり構えられる速度に）
-  useEffect(() => {
-    if (frames.length <= 1) return
-    const tid = window.setInterval(() => setIdx(i => (i + 1) % frames.length), 900)
-    return () => clearInterval(tid)
-  }, [frames.length])
-  if (frames.length === 0) {
-    return (
-      <div className="bg-court-card rounded-xl p-6 text-center text-xs text-gray-400">
-        QR を生成中…
-      </div>
-    )
-  }
-  return (
-    <div className="bg-court-card rounded-xl p-3 space-y-2">
-      <div className="text-xs text-gray-400">{label}</div>
-      <div className="bg-white rounded-lg p-2 flex items-center justify-center">
-        <img src={frames[idx]} alt="QR" className="w-full max-w-[260px] aspect-square" />
-      </div>
-      <div className="text-[10px] text-gray-500 text-center">
-        {frames.length === 1
-          ? '✓ 1 枚で完結（このまま映し続けてください）'
-          : `${idx + 1} / ${frames.length} フレームを 0.9 秒ごとに切替（読み取り側は集まるまで映し続ける）`}
-      </div>
-    </div>
-  )
-}
-
-/** カメラで QR を読み取り、復号できたら onDecoded を呼ぶ。 */
-function QrScan({ label, onDecoded }: { label: string; onDecoded: (s: string) => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const [progress, setProgress] = useState<{ received: number; total: number } | null>(null)
-  const [err, setErr] = useState<string | null>(null)
-  const [done, setDone] = useState(false)
-  useEffect(() => {
-    if (!videoRef.current) return
-    const sc = createQrScanner(
-      (received, total) => setProgress({ received, total }),
-      (decoded) => {
-        setDone(true)
-        sc.stop()
-        onDecoded(decoded)
-      },
-    )
-    sc.start(videoRef.current).catch(e => setErr('カメラ起動失敗：' + (e?.message ?? String(e))))
-    return () => sc.stop()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-  return (
-    <div className="bg-court-card rounded-xl p-3 space-y-2">
-      <div className="text-xs text-gray-400">{label}</div>
-      <div className="relative bg-black rounded-lg overflow-hidden aspect-square">
-        <video ref={videoRef} playsInline muted className="absolute inset-0 w-full h-full object-cover" />
-        {/* スキャンレチクル */}
-        <div className="absolute inset-8 border-2 border-court-accent rounded-lg pointer-events-none" />
-        {done && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/70">
-            <div className="text-5xl">✅</div>
-          </div>
-        )}
-      </div>
-      {err && <div className="text-xs text-court-danger">{err}</div>}
-      {progress && progress.total > 1 && (
-        <div className="text-[10px] text-gray-400 text-center">
-          {progress.received} / {progress.total} フレーム受信
-        </div>
-      )}
-      <div className="text-[10px] text-gray-500 text-center">
-        相手の QR を緑色の枠内に映してください
-      </div>
     </div>
   )
 }
