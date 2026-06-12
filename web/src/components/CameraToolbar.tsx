@@ -59,14 +59,14 @@ export function CameraToolbar({ cam, disabled, compact }: {
             )
           })}
         </div>
-        {cam.availablePresets.length === 0 && (
-          <div className="text-[10px] text-gray-500 mt-1">
-            この端末ではカメラ情報を取得できませんでした。手動コントロールをご利用ください。
+        {cam.presetNote && (
+          <div className={`text-[10px] mt-1 rounded px-2 py-1 ${cam.presetNote.startsWith('✅') ? 'bg-emerald-900/50 text-emerald-200' : 'bg-blue-900/50 text-blue-200'}`}>
+            {cam.presetNote}
           </div>
         )}
         {!cam.availablePresets.includes(0.5) && (
           <div className="text-[10px] text-gray-500 mt-1">
-            ℹ️ 0.5× には超広角／融合カメラが必要です。この端末では非搭載または検出不可。
+            ℹ️ 0.5× には超広角カメラが必要です（背面カメラが 1 台のみの端末では使えません）。
           </div>
         )}
       </div>

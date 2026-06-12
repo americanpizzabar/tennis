@@ -22,9 +22,31 @@ export interface CameraDeviceInfo {
    *  - ULTRA_WIDE：0.5× 超広角単焦点
    *  - WIDE：1× 標準（広角）単焦点
    *  - TELE：望遠（2×／3×／5×）
-   *  - STANDARD：不明だが何らかの単焦点
+   *  - STANDARD：不明だが何らかの単焦点（Pixel 等の「camera2 N」はここ）
    */
   hint: 'FUSED' | 'ULTRA_WIDE' | 'WIDE' | 'TELE' | 'STANDARD'
+  /** 実測（キャッシュ）したハードウェアズーム範囲。一度使ったカメラのみ判明。 */
+  zoomMin?: number
+  zoomMax?: number
+}
+
+// ── 実測ズーム範囲のキャッシュ（deviceId はオリジン毎に安定） ──
+const ZOOM_CACHE_PREFIX = 'tennis.camZoom.'
+
+export function getCachedZoomRange(deviceId: string): { min: number; max: number } | null {
+  try {
+    const raw = localStorage.getItem(ZOOM_CACHE_PREFIX + deviceId)
+    if (!raw) return null
+    const v = JSON.parse(raw)
+    if (typeof v?.min === 'number' && typeof v?.max === 'number') return v
+  } catch { /* noop */ }
+  return null
+}
+
+export function setCachedZoomRange(deviceId: string, min: number, max: number) {
+  try {
+    localStorage.setItem(ZOOM_CACHE_PREFIX + deviceId, JSON.stringify({ min, max }))
+  } catch { /* noop */ }
 }
 
 export interface ZoomCapability {
@@ -56,7 +78,11 @@ export async function listCameras(): Promise<CameraDeviceInfo[]> {
       else if (/ultra[\s-]?wide|超広角|0[.,]5x?/.test(lower)) hint = 'ULTRA_WIDE'
       else if (/tele|望遠|telephoto|[2-9]x|zoom/.test(lower)) hint = 'TELE'
       else if (/wide|広角/.test(lower)) hint = 'WIDE'
-      return { deviceId: d.deviceId, label: d.label || '不明なカメラ', facing, hint }
+      const cached = getCachedZoomRange(d.deviceId)
+      return {
+        deviceId: d.deviceId, label: d.label || '不明なカメラ', facing, hint,
+        zoomMin: cached?.min, zoomMax: cached?.max,
+      }
     })
 }
 
@@ -156,6 +182,15 @@ export function planLogicalZoom(
 
   // 0.5× 圏
   if (level < 1) {
+    // 実測で zoom min < 1 と判明しているカメラ（Pixel 等の論理カメラ）を最優先
+    const measured = back.find(c => c.zoomMin != null && c.zoomMin < 1)
+    if (measured) {
+      return {
+        deviceId: measured.deviceId,
+        hardwareZoom: Math.max(measured.zoomMin!, level),
+        rationale: '0.5× → 実測ズーム 0.5 対応カメラ',
+      }
+    }
     if (ultra) return { deviceId: ultra.deviceId, rationale: '0.5× → 超広角カメラ' }
     if (fused) return { deviceId: fused.deviceId, hardwareZoom: 0.5, rationale: '0.5× → 融合カメラの広角端' }
     return null

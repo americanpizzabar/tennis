@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   listCameras, backCameras, openCamera, getZoomCapability, applyHardwareZoom,
-  planLogicalZoom, type CameraDeviceInfo, type ZoomCapability,
+  planLogicalZoom, setCachedZoomRange, type CameraDeviceInfo, type ZoomCapability,
 } from '../lib/camera'
 
 /**
@@ -35,6 +35,8 @@ export interface CameraDeviceState {
   /** 現在の論理ズーム（最後にユーザが選んだ値）。 */
   currentPreset: number
   error: string | null
+  /** プリセット切替時の案内（発見モードの「次のカメラを試して」等）。 */
+  presetNote: string | null
   /** カメラを指定して再オープン。 */
   switchTo: (deviceId: string) => Promise<void>
   /** プリセット（0.5×/1×/2×/5×）に切替。最適カメラ＋ハードウェアズームを自動選択。 */
@@ -62,7 +64,9 @@ export function useCameraDevice(
   const [digitalZoom, setDigitalZoom] = useState(1)
   const [currentPreset, setCurrentPreset] = useState(1)
   const [error, setError] = useState<string | null>(null)
+  const [presetNote, setPresetNote] = useState<string | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const discoverIdxRef = useRef(0)   // 0.5× 発見モードの巡回インデックス
 
   // <video> に stream を貼り直す
   const attach = useCallback((s: MediaStream | null) => {
@@ -74,6 +78,18 @@ export function useCameraDevice(
       if (s) v.play().catch(() => { /* autoplay 制限 */ })
     }
   }, [videoRef])
+
+  // ズーム能力の読み取り＋キャッシュ。
+  // Chrome Android は getUserMedia 直後だと capabilities が未設定のことがあるため、
+  // 少し遅らせて再読込する（Pixel で 0.5× が見えなかった主因）。
+  const refreshZoomCap = useCallback((deviceId?: string) => {
+    const cap = getZoomCapability(streamRef.current)
+    if (cap.supported) {
+      setZoomCap(cap)
+      if (deviceId) setCachedZoomRange(deviceId, cap.min, cap.max)
+    }
+    return cap
+  }, [])
 
   // 起動／切替の共通ロジック
   const open = useCallback(async (deviceId?: string) => {
@@ -90,17 +106,29 @@ export function useCameraDevice(
         height: opts.height ?? 720,
       })
       attach(newStream)
-      setZoomCap(getZoomCapability(newStream))
       setDigitalZoom(1)
       const settings = newStream.getVideoTracks()[0]?.getSettings()
-      setActiveId(settings?.deviceId ?? deviceId)
+      const realId = settings?.deviceId ?? deviceId
+      setActiveId(realId)
+      // 能力読み取り：即時＋遅延 2 回（capabilities の遅延 populate 対策）
+      const immediate = getZoomCapability(newStream)
+      setZoomCap(immediate)
+      if (immediate.supported && realId) setCachedZoomRange(realId, immediate.min, immediate.max)
+      window.setTimeout(() => refreshZoomCap(realId), 300)
+      window.setTimeout(() => {
+        refreshZoomCap(realId)
+        // 遅延後の実測値をカメラ一覧へ反映（planLogicalZoom が学習結果を使えるように）
+        listCameras().then(cams => setCameras(backCameras(cams)))
+      }, 1200)
       // 許可後のカメラ列挙
       const cams = await listCameras()
       setCameras(backCameras(cams))
+      return realId
     } catch (e: any) {
       setError('カメラへのアクセスに失敗：' + (e?.message ?? String(e)))
+      return undefined
     }
-  }, [opts.audio, opts.width, opts.height, attach])
+  }, [opts.audio, opts.width, opts.height, attach, refreshZoomCap])
 
   // 自動起動
   useEffect(() => {
@@ -128,6 +156,7 @@ export function useCameraDevice(
 
   const selectPreset = useCallback(async (level: number) => {
     setCurrentPreset(level)
+    setPresetNote(null)
     // ① まず「現在のカメラのハードウェアズーム」で到達できるか確認。
     //    Android の多くは超広角を別カメラではなく zoom min=0.5 として公開するため、
     //    カメラ切替なしで 0.5× に到達できるケースが最多。
@@ -139,31 +168,63 @@ export function useCameraDevice(
         return
       }
     }
-    // ② カメラ切替プラン（iOS の Ultra Wide / Triple Camera など）
+    // ②' 遅延 populate 対策：いったん能力を再読込してもう一度試す
+    const fresh = refreshZoomCap(activeDeviceId)
+    if (fresh.supported && level >= fresh.min - 1e-6 && level <= fresh.max + 1e-6) {
+      const ok = await applyHardwareZoom(streamRef.current, level)
+      if (ok) {
+        setZoomCap(c => ({ ...c, current: level }))
+        setDigitalZoom(1)
+        return
+      }
+    }
+    // ② カメラ切替プラン（iOS の Ultra Wide / Triple、実測キャッシュ済みカメラ）
     const plan = planLogicalZoom(level, cameras)
-    if (!plan) {
-      // フォールバック：今のカメラのまま CSS デジタル（縮小 0.5× は不可能なので 1 未満は無視）
-      if (level >= 1) setDigitalZoom(level)
+    if (plan) {
+      if (plan.deviceId !== activeDeviceId) {
+        await open(plan.deviceId)
+      }
+      if (plan.hardwareZoom != null) {
+        const ok = await applyHardwareZoom(streamRef.current, plan.hardwareZoom)
+        if (ok) {
+          setZoomCap(c => ({ ...c, current: plan.hardwareZoom! }))
+          setDigitalZoom(1)
+        } else if (level >= 1) {
+          setDigitalZoom(level)
+        }
+      } else {
+        setDigitalZoom(1)
+      }
       return
     }
-    // 必要なら別カメラに切替
-    if (plan.deviceId !== activeDeviceId) {
-      await open(plan.deviceId)
-    }
-    // ハードウェアズームを適用
-    if (plan.hardwareZoom != null) {
-      const ok = await applyHardwareZoom(streamRef.current, plan.hardwareZoom)
-      if (ok) {
-        setZoomCap(c => ({ ...c, current: plan.hardwareZoom! }))
-        setDigitalZoom(1)
-      } else if (level >= 1) {
-        // ハード非対応 → CSS で代替（拡大のみ）
-        setDigitalZoom(level)
+    // ③ 0.5× の発見モード：Pixel 等は超広角が「無名の別カメラ」。
+    //    タップごとに次の背面カメラへ巡回し、ユーザが画角で確認する。
+    //    切替後に zoom 範囲を実測キャッシュするので、対応カメラなら次回から自動。
+    if (level < 1) {
+      const others = cameras.filter(c => c.deviceId !== activeDeviceId)
+      if (others.length === 0) {
+        setPresetNote('この端末では超広角カメラを検出できませんでした。')
+        return
       }
-    } else {
-      setDigitalZoom(1)
+      const idx = discoverIdxRef.current % others.length
+      discoverIdxRef.current++
+      const newId = await open(others[idx].deviceId)
+      // 開いた後に 0.5 を試す（実測値が遅延 populate される場合に備え再試行つき）
+      window.setTimeout(async () => {
+        const cap = refreshZoomCap(newId)
+        if (cap.supported && cap.min < 1) {
+          await applyHardwareZoom(streamRef.current, Math.max(cap.min, level))
+          setZoomCap(c => ({ ...c, current: Math.max(cap.min, level) }))
+          setPresetNote('✅ 0.5× 対応カメラに切替えました。')
+        } else {
+          setPresetNote(`📷 カメラ ${idx + 1}/${others.length} に切替。画角が広がっていなければ、もう一度 0.5× をタップして次を試してください。`)
+        }
+      }, 500)
+      return
     }
-  }, [cameras, activeDeviceId, open, zoomCap])
+    // ④ フォールバック：拡大のみ CSS デジタル
+    if (level >= 1) setDigitalZoom(level)
+  }, [cameras, activeDeviceId, open, zoomCap, refreshZoomCap])
 
   const setZoom = useCallback(async (z: number) => {
     if (zoomCap.supported) {
@@ -188,9 +249,9 @@ export function useCameraDevice(
 
   return {
     stream, cameras, activeDeviceId, zoomCap, currentPreset, digitalZoom,
-    availablePresets, error,
+    availablePresets, error, presetNote,
     switchTo, selectPreset, setZoom, stop,
-    openInitial: () => open(),
+    openInitial: async () => { await open() },
   }
 }
 
@@ -198,9 +259,11 @@ function computeAvailablePresets(cams: CameraDeviceInfo[], cap: ZoomCapability):
   return PRESET_LEVELS.filter(z => {
     // ① 現在のカメラのハードウェアズーム範囲内なら OK（Android の 0.5× はここで通る）
     if (cap.supported && z >= cap.min - 1e-6 && z <= cap.max + 1e-6) return true
-    // ② 別カメラへの切替プランがあれば OK（iOS の Ultra Wide 等）
+    // ② 別カメラへの切替プランがあれば OK（iOS の Ultra Wide / 実測キャッシュ済み）
     if (cams.length > 0 && planLogicalZoom(z, cams) !== null) return true
-    // ③ 1× 以上は CSS デジタルでも実現できる（0.5× は CSS では不可能）
-    return z >= 1
+    // ③ 0.5× は「発見モード」が使えるので、背面カメラが 2 台以上あれば有効
+    if (z < 1) return cams.length >= 2
+    // ④ 1× 以上は CSS デジタルでも実現できる
+    return true
   })
 }
