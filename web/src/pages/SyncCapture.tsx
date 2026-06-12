@@ -93,6 +93,15 @@ export function SyncCapturePage() {
     }).catch(e => setError('カメラへのアクセスに失敗：' + (e?.message ?? String(e))))
   }, [step])
 
+  // 接続フェーズで <video> が未マウント → LOBBY に来た時に映像が出ない問題の修正。
+  // <video> が DOM に登場した瞬間に srcObject を再アタッチする。
+  useEffect(() => {
+    if (videoRef.current && streamRef.current && !videoRef.current.srcObject) {
+      videoRef.current.srcObject = streamRef.current
+      videoRef.current.play().catch(() => { /* noop */ })
+    }
+  }, [step])
+
   // ── クリーンアップ ──
   useEffect(() => () => {
     if (startTimerRef.current) clearTimeout(startTimerRef.current)
