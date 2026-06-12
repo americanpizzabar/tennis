@@ -78,26 +78,32 @@ function base64ToBytes(b64: string): Uint8Array {
 }
 
 // ── QR フレーム生成 ─────────────────────────────────
-const MAX_PER_FRAME = 700   // QR バージョン 25 程度に収まる安全値（M誤り訂正）
+/**
+ * 1 フレームに入れる上限。
+ * QR バージョン 30（誤り訂正 L）の英数モード容量に近づけるため、以前の 700 → 1500 へ拡張。
+ * 圧縮済み SDP（~600〜1200B）はほぼ常に 1 枚で収まるようになる。
+ */
+const MAX_PER_FRAME = 1500
 
 /** 任意文字列を 1 つ以上の QR データ URL に変換。マルチパート時は配列。 */
 export async function encodeToQRFrames(input: string): Promise<string[]> {
   const compressed = await gzipBase64(input)
   // 単フレームで足りるか
   if (compressed.length <= MAX_PER_FRAME) {
+    // 1 枚で完結する場合、誤り訂正を L に下げて容量を最大化、密度を確保
     const dataUrl = await QRCode.toDataURL(JSON.stringify({ i: 0, n: 1, p: compressed }), {
-      errorCorrectionLevel: 'M', margin: 1, width: 360,
+      errorCorrectionLevel: 'L', margin: 1, width: 420,
     })
     return [dataUrl]
   }
-  // 複数フレーム
+  // 複数フレーム（保険）
   const n = Math.ceil(compressed.length / MAX_PER_FRAME)
   const frames: string[] = []
   for (let i = 0; i < n; i++) {
     const p = compressed.slice(i * MAX_PER_FRAME, (i + 1) * MAX_PER_FRAME)
     const frame: QrFrame = { i, n, p }
     const dataUrl = await QRCode.toDataURL(JSON.stringify(frame), {
-      errorCorrectionLevel: 'M', margin: 1, width: 360,
+      errorCorrectionLevel: 'L', margin: 1, width: 420,
     })
     frames.push(dataUrl)
   }

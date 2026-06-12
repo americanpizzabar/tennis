@@ -673,10 +673,10 @@ function QrShow({ label, payload }: { label: string; payload: string }) {
     encodeToQRFrames(payload).then(f => { if (!cancelled) { setFrames(f); setIdx(0) } })
     return () => { cancelled = true }
   }, [payload])
-  // マルチパートはローテーション
+  // マルチパートはローテーション（読み取り側がじっくり構えられる速度に）
   useEffect(() => {
     if (frames.length <= 1) return
-    const tid = window.setInterval(() => setIdx(i => (i + 1) % frames.length), 400)
+    const tid = window.setInterval(() => setIdx(i => (i + 1) % frames.length), 900)
     return () => clearInterval(tid)
   }, [frames.length])
   if (frames.length === 0) {
@@ -693,7 +693,9 @@ function QrShow({ label, payload }: { label: string; payload: string }) {
         <img src={frames[idx]} alt="QR" className="w-full max-w-[260px] aspect-square" />
       </div>
       <div className="text-[10px] text-gray-500 text-center">
-        {frames.length === 1 ? '1 枚で完結' : `${idx + 1} / ${frames.length} フレーム（自動切替）`}
+        {frames.length === 1
+          ? '✓ 1 枚で完結（このまま映し続けてください）'
+          : `${idx + 1} / ${frames.length} フレームを 0.9 秒ごとに切替（読み取り側は集まるまで映し続ける）`}
       </div>
     </div>
   )
