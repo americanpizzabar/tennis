@@ -5,6 +5,7 @@ import {
 } from '../lib/syncSession'
 import { saveSyncSession } from '../lib/db'
 import type { SyncClip, SyncSessionRecord } from '../types/sync'
+import { encodeToQRFrames, createQrScanner } from '../lib/qrPair'
 
 function pickVideoMime(): string {
   const candidates = [
@@ -296,39 +297,33 @@ export function SyncCapturePage() {
       )}
 
       {step === 'HOST_OFFER' && (
-        <div className="space-y-3">
-          <Info>
-            ① このコードを <b>子機（サイド）</b> に渡してください（コピー → メッセージ等で共有）。<br />
-            ② 子機が出した「応答コード」を下に貼り付けます。
-          </Info>
-          <CodeBox label="① 接続コード（子機へ渡す）" value={offerCode} />
-          <PasteBox
-            label="② 子機からの応答コードを貼り付け"
-            value={pasteCode} onChange={setPasteCode} onSubmit={submitAnswer}
-            submitLabel="接続する"
-          />
-        </div>
+        <HostPairing
+          offerCode={offerCode}
+          pasteCode={pasteCode} setPasteCode={setPasteCode}
+          onSubmitAnswer={submitAnswer}
+          onScannedAnswer={async (decoded) => {
+            setPasteCode(decoded)
+            try { await sessionRef.current!.acceptAnswer(decoded); setStep('LOBBY') } catch {
+              setError('応答コードの適用に失敗しました')
+            }
+          }}
+        />
       )}
 
       {step === 'GUEST_OFFER_IN' && (
-        <div className="space-y-3">
-          <Info>
-            ① 親機（後方）が出した「接続コード」を下に貼り付けます。<br />
-            ② 生成された「応答コード」を親機に返してください。
-          </Info>
-          {!answerCode ? (
-            <PasteBox
-              label="① 親機の接続コードを貼り付け"
-              value={pasteCode} onChange={setPasteCode} onSubmit={submitOffer}
-              submitLabel="応答コードを生成"
-            />
-          ) : (
-            <>
-              <CodeBox label="② 応答コード（親機へ返す）" value={answerCode} />
-              <div className="text-center text-xs text-gray-400">親機が接続すると自動で次に進みます…</div>
-            </>
-          )}
-        </div>
+        <GuestPairing
+          answerCode={answerCode}
+          pasteCode={pasteCode} setPasteCode={setPasteCode}
+          onSubmitOffer={submitOffer}
+          onScannedOffer={async (decoded) => {
+            try {
+              const ans = await sessionRef.current!.createAnswer(decoded)
+              setAnswerCode(ans)
+            } catch {
+              setError('接続コードの処理に失敗しました')
+            }
+          }}
+        />
       )}
 
       {(step === 'LOBBY' || step === 'RECORDING' || step === 'TRANSFER' || step === 'DONE') && (
@@ -413,6 +408,7 @@ function RolePicker({ onHost, onGuest }: { onHost: () => void; onGuest: () => vo
       <Info>
         2 台のスマホを連動させます。<b>1 台で「親機（後方）」</b>を選び、
         もう 1 台で<b>「子機（サイド）」</b>を選んでください。<br />
+        📷 接続は <b>QR を見せ合うだけ</b>で完了します（手動コード貼付も選択可）。<br />
         ※ 同じ Wi-Fi に繋ぐと最も安定します（モバイル回線でも可）。
       </Info>
       <button onClick={onHost}
@@ -556,6 +552,194 @@ function ProgressBar({ label, ratio }: { label: string; ratio: number }) {
       </div>
       <div className="w-full bg-court-card rounded-full h-2 overflow-hidden">
         <div className="bg-court-accent h-full transition-all" style={{ width: `${ratio * 100}%` }} />
+      </div>
+    </div>
+  )
+}
+
+// ── QR ペアリング（推奨フロー） ──────────────────────
+type PairMode = 'QR' | 'MANUAL'
+
+function HostPairing({
+  offerCode, pasteCode, setPasteCode, onSubmitAnswer, onScannedAnswer,
+}: {
+  offerCode: string
+  pasteCode: string; setPasteCode: (s: string) => void
+  onSubmitAnswer: () => void
+  onScannedAnswer: (decoded: string) => void
+}) {
+  const [mode, setMode] = useState<PairMode>('QR')
+  return (
+    <div className="space-y-3">
+      <ModeTabs mode={mode} setMode={setMode} />
+      {mode === 'QR' ? (
+        <>
+          <Info>
+            ① <b>子機（サイド）</b> のカメラでこの QR を映してください。<br />
+            ② 子機の画面に出た QR をこの端末で読み取って接続完了！
+          </Info>
+          <QrShow label="① 接続用 QR（子機が読み取る）" payload={offerCode} />
+          <QrScan label="② 子機の応答 QR を読み取る" onDecoded={onScannedAnswer} />
+        </>
+      ) : (
+        <>
+          <Info>
+            QR が使えない場合のフォールバック：コードをメッセージ等で交換します。<br />
+            ① このコードを子機に送信 → ② 子機が出した応答コードを貼り付け。
+          </Info>
+          <CodeBox label="① 接続コード（子機へ送る）" value={offerCode} />
+          <PasteBox
+            label="② 子機からの応答コードを貼り付け"
+            value={pasteCode} onChange={setPasteCode} onSubmit={onSubmitAnswer}
+            submitLabel="接続する"
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
+function GuestPairing({
+  answerCode, pasteCode, setPasteCode, onSubmitOffer, onScannedOffer,
+}: {
+  answerCode: string
+  pasteCode: string; setPasteCode: (s: string) => void
+  onSubmitOffer: () => void
+  onScannedOffer: (decoded: string) => void
+}) {
+  const [mode, setMode] = useState<PairMode>('QR')
+  return (
+    <div className="space-y-3">
+      <ModeTabs mode={mode} setMode={setMode} />
+      {mode === 'QR' ? (
+        <>
+          <Info>
+            ① <b>親機（後方）</b> のカメラに表示された QR をこの端末で読み取ります。<br />
+            ② 自動生成される応答 QR を親機のカメラに映せば接続完了！
+          </Info>
+          {!answerCode ? (
+            <QrScan label="① 親機の QR を読み取る" onDecoded={onScannedOffer} />
+          ) : (
+            <>
+              <QrShow label="② 応答用 QR（親機が読み取る）" payload={answerCode} />
+              <div className="text-center text-xs text-gray-400">親機が読み取ると自動で次に進みます…</div>
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          <Info>
+            QR が使えない場合のフォールバック：コードを貼り付け→生成→送信。
+          </Info>
+          {!answerCode ? (
+            <PasteBox
+              label="① 親機の接続コードを貼り付け"
+              value={pasteCode} onChange={setPasteCode} onSubmit={onSubmitOffer}
+              submitLabel="応答コードを生成"
+            />
+          ) : (
+            <>
+              <CodeBox label="② 応答コード（親機へ返す）" value={answerCode} />
+              <div className="text-center text-xs text-gray-400">親機が接続すると自動で次に進みます…</div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function ModeTabs({ mode, setMode }: { mode: PairMode; setMode: (m: PairMode) => void }) {
+  return (
+    <div className="grid grid-cols-2 gap-1 bg-court-card rounded-xl p-1">
+      <button onClick={() => setMode('QR')}
+        className={`py-2 rounded text-xs font-bold ${mode === 'QR' ? 'bg-court-accent text-white' : 'text-gray-300'}`}>
+        📷 QR コード（推奨）
+      </button>
+      <button onClick={() => setMode('MANUAL')}
+        className={`py-2 rounded text-xs font-bold ${mode === 'MANUAL' ? 'bg-court-accent text-white' : 'text-gray-300'}`}>
+        ⌨️ コード貼付（手動）
+      </button>
+    </div>
+  )
+}
+
+/** QR を表示（マルチパートならアニメ）。 */
+function QrShow({ label, payload }: { label: string; payload: string }) {
+  const [frames, setFrames] = useState<string[]>([])
+  const [idx, setIdx] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    encodeToQRFrames(payload).then(f => { if (!cancelled) { setFrames(f); setIdx(0) } })
+    return () => { cancelled = true }
+  }, [payload])
+  // マルチパートはローテーション
+  useEffect(() => {
+    if (frames.length <= 1) return
+    const tid = window.setInterval(() => setIdx(i => (i + 1) % frames.length), 400)
+    return () => clearInterval(tid)
+  }, [frames.length])
+  if (frames.length === 0) {
+    return (
+      <div className="bg-court-card rounded-xl p-6 text-center text-xs text-gray-400">
+        QR を生成中…
+      </div>
+    )
+  }
+  return (
+    <div className="bg-court-card rounded-xl p-3 space-y-2">
+      <div className="text-xs text-gray-400">{label}</div>
+      <div className="bg-white rounded-lg p-2 flex items-center justify-center">
+        <img src={frames[idx]} alt="QR" className="w-full max-w-[260px] aspect-square" />
+      </div>
+      <div className="text-[10px] text-gray-500 text-center">
+        {frames.length === 1 ? '1 枚で完結' : `${idx + 1} / ${frames.length} フレーム（自動切替）`}
+      </div>
+    </div>
+  )
+}
+
+/** カメラで QR を読み取り、復号できたら onDecoded を呼ぶ。 */
+function QrScan({ label, onDecoded }: { label: string; onDecoded: (s: string) => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [progress, setProgress] = useState<{ received: number; total: number } | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [done, setDone] = useState(false)
+  useEffect(() => {
+    if (!videoRef.current) return
+    const sc = createQrScanner(
+      (received, total) => setProgress({ received, total }),
+      (decoded) => {
+        setDone(true)
+        sc.stop()
+        onDecoded(decoded)
+      },
+    )
+    sc.start(videoRef.current).catch(e => setErr('カメラ起動失敗：' + (e?.message ?? String(e))))
+    return () => sc.stop()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return (
+    <div className="bg-court-card rounded-xl p-3 space-y-2">
+      <div className="text-xs text-gray-400">{label}</div>
+      <div className="relative bg-black rounded-lg overflow-hidden aspect-square">
+        <video ref={videoRef} playsInline muted className="absolute inset-0 w-full h-full object-cover" />
+        {/* スキャンレチクル */}
+        <div className="absolute inset-8 border-2 border-court-accent rounded-lg pointer-events-none" />
+        {done && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+            <div className="text-5xl">✅</div>
+          </div>
+        )}
+      </div>
+      {err && <div className="text-xs text-court-danger">{err}</div>}
+      {progress && progress.total > 1 && (
+        <div className="text-[10px] text-gray-400 text-center">
+          {progress.received} / {progress.total} フレーム受信
+        </div>
+      )}
+      <div className="text-[10px] text-gray-500 text-center">
+        相手の QR を緑色の枠内に映してください
       </div>
     </div>
   )
