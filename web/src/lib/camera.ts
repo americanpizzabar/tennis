@@ -16,8 +16,15 @@ export interface CameraDeviceInfo {
   label: string
   /** 推定：'environment'（背面）/'user'（前面）/不明。 */
   facing: 'environment' | 'user' | 'unknown'
-  /** ラベルから推測した役割（広角／超広角／望遠／標準）。確実ではない。 */
-  hint: 'WIDE' | 'ULTRA_WIDE' | 'TELE' | 'STANDARD'
+  /**
+   * ラベルから推測した役割。
+   *  - FUSED：複数レンズを融合した「Triple／Dual Camera」（iOS 系で 0.5×〜5× をサポート）
+   *  - ULTRA_WIDE：0.5× 超広角単焦点
+   *  - WIDE：1× 標準（広角）単焦点
+   *  - TELE：望遠（2×／3×／5×）
+   *  - STANDARD：不明だが何らかの単焦点
+   */
+  hint: 'FUSED' | 'ULTRA_WIDE' | 'WIDE' | 'TELE' | 'STANDARD'
 }
 
 export interface ZoomCapability {
@@ -41,21 +48,23 @@ export async function listCameras(): Promise<CameraDeviceInfo[]> {
     .map(d => {
       const lower = (d.label || '').toLowerCase()
       let facing: CameraDeviceInfo['facing'] = 'unknown'
-      if (/back|rear|environment|背面/i.test(d.label)) facing = 'environment'
-      else if (/front|user|face|前面/i.test(d.label)) facing = 'user'
+      if (/back|rear|environment|背面/.test(lower)) facing = 'environment'
+      else if (/front|user|face|前面/.test(lower)) facing = 'user'
       let hint: CameraDeviceInfo['hint'] = 'STANDARD'
-      if (/ultra ?wide|超広角|0\.5x/.test(lower)) hint = 'ULTRA_WIDE'
+      // 「Back Triple Camera」「Back Dual Wide Camera」などの融合カメラ（0.5×可）を優先判定
+      if (/triple|dual/.test(lower)) hint = 'FUSED'
+      else if (/ultra[\s-]?wide|超広角|0[.,]5x?/.test(lower)) hint = 'ULTRA_WIDE'
+      else if (/tele|望遠|telephoto|[2-9]x|zoom/.test(lower)) hint = 'TELE'
       else if (/wide|広角/.test(lower)) hint = 'WIDE'
-      else if (/tele|望遠|telephoto|2x|3x|5x/.test(lower)) hint = 'TELE'
       return { deviceId: d.deviceId, label: d.label || '不明なカメラ', facing, hint }
     })
 }
 
-/** よく使う「背面の広角／超広角／望遠」を優先順序で返す。 */
+/** 背面カメラだけを「0.5×が使えそうな順」に並べ替えて返す。 */
 export function backCameras(cams: CameraDeviceInfo[]): CameraDeviceInfo[] {
   const back = cams.filter(c => c.facing === 'environment' || c.facing === 'unknown')
-  // ULTRA_WIDE → STANDARD → WIDE → TELE の順で並べる（広角優先）
-  const order: CameraDeviceInfo['hint'][] = ['ULTRA_WIDE', 'STANDARD', 'WIDE', 'TELE']
+  // FUSED（0.5×〜マルチ）→ ULTRA_WIDE → STANDARD → WIDE → TELE
+  const order: CameraDeviceInfo['hint'][] = ['FUSED', 'ULTRA_WIDE', 'STANDARD', 'WIDE', 'TELE']
   return back.sort((a, b) => order.indexOf(a.hint) - order.indexOf(b.hint))
 }
 
@@ -111,4 +120,57 @@ export async function applyHardwareZoom(stream: MediaStream | null, zoom: number
   } catch {
     return false
   }
+}
+
+/**
+ * 「0.5× / 1× / 2× / 5×」のような論理ズームレベルを、
+ * その端末で「どのカメラ × どのハードウェアズーム値」で実現するかに変換。
+ *
+ * - 0.5× を実現できる順位：FUSED（min=0.5）＞ ULTRA_WIDE 単独
+ * - 1×：FUSED または STANDARD／WIDE
+ * - 2× 以上：FUSED で zoom 設定／TELE 単独
+ *
+ * 戻り値の `deviceId` に切替え、ストリームを開いてから zoom を適用する。
+ */
+export interface LogicalZoomPlan {
+  deviceId: string
+  /** ハードウェアズームで設定する値（カメラ側の min..max にクランプ）。 */
+  hardwareZoom?: number
+  /** どのカメラを使うかの説明。 */
+  rationale: string
+}
+
+export function planLogicalZoom(
+  level: number, cams: CameraDeviceInfo[],
+): LogicalZoomPlan | null {
+  const back = backCameras(cams)
+  if (back.length === 0) return null
+
+  // 1) 融合カメラ（0.5× 起点）があれば最優先
+  const fused = back.find(c => c.hint === 'FUSED')
+  // 2) 各単焦点
+  const ultra = back.find(c => c.hint === 'ULTRA_WIDE')
+  const wide = back.find(c => c.hint === 'WIDE')
+  const standard = back.find(c => c.hint === 'STANDARD')
+  const tele = back.find(c => c.hint === 'TELE')
+
+  // 0.5× 圏
+  if (level < 1) {
+    if (ultra) return { deviceId: ultra.deviceId, rationale: '0.5× → 超広角カメラ' }
+    if (fused) return { deviceId: fused.deviceId, hardwareZoom: 0.5, rationale: '0.5× → 融合カメラの広角端' }
+    return null
+  }
+  // 2× 圏（望遠が望ましい）
+  if (level >= 2) {
+    if (tele) return { deviceId: tele.deviceId, hardwareZoom: level >= 5 ? undefined : level, rationale: `${level}× → 望遠カメラ` }
+    if (fused) return { deviceId: fused.deviceId, hardwareZoom: level, rationale: `${level}× → 融合カメラ` }
+    if (wide ?? standard) {
+      const d = (wide ?? standard)!
+      return { deviceId: d.deviceId, hardwareZoom: level, rationale: `${level}× → 標準カメラ＋デジタルズーム` }
+    }
+    return null
+  }
+  // 1× 圏：融合 or 標準
+  const target = fused ?? wide ?? standard ?? back[0]
+  return { deviceId: target.deviceId, hardwareZoom: 1, rationale: '1× → 標準' }
 }

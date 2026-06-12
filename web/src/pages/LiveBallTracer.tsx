@@ -5,10 +5,8 @@ import { buildVideoToCourt } from '../lib/homography'
 import {
   LiveBallTracker, type LiveBounce, type LiveNetCross, type LivePoint,
 } from '../lib/liveBallTracker'
-import {
-  listCameras, backCameras, openCamera, getZoomCapability, applyHardwareZoom,
-  type CameraDeviceInfo, type ZoomCapability,
-} from '../lib/camera'
+import { useCameraDevice } from '../hooks/useCameraDevice'
+import { CameraToolbar } from '../components/CameraToolbar'
 
 /**
  * フェーズ2：ライブカメラ即時弾道トレーサー。
@@ -56,15 +54,9 @@ export function LiveBallTracerPage() {
   const [latestVerdict, setLatestVerdict] = useState<LiveBounce | null>(null)
   const [latestNet, setLatestNet] = useState<LiveNetCross | null>(null)
 
-  // カメラ列挙＋ズーム
-  const [cameras, setCameras] = useState<CameraDeviceInfo[]>([])
-  const [activeDeviceId, setActiveDeviceId] = useState<string | undefined>(undefined)
-  const [zoomCap, setZoomCap] = useState<ZoomCapability>({ supported: false, min: 1, max: 1, step: 0.1, current: 1 })
-  const [digitalZoom, setDigitalZoom] = useState(1)   // ハードズーム非対応時の CSS フォールバック
-
   const videoRef = useRef<HTMLVideoElement>(null)
+  const cam = useCameraDevice(videoRef, { audio: true })
   const overlayRef = useRef<HTMLCanvasElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
   const trackerRef = useRef<LiveBallTracker | null>(null)
   const startTimeRef = useRef(performance.now())
   const rafRef = useRef<number | null>(null)
@@ -74,61 +66,18 @@ export function LiveBallTracerPage() {
   const mrRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
 
-  // ── カメラ起動 / 切替 ──
-  const openWith = async (deviceId?: string) => {
-    setError(null)
-    try {
-      // 既存ストリームを止める
-      streamRef.current?.getTracks().forEach(t => t.stop())
-      streamRef.current = null
-      const stream = await openCamera({
-        deviceId, facingMode: deviceId ? undefined : 'environment',
-        audio: true, width: 1280, height: 720,
-      })
-      streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        videoRef.current.play().catch(() => { /* autoplay 制限時は無視 */ })
-      }
-      // ズーム能力を更新
-      setZoomCap(getZoomCapability(stream))
-      setDigitalZoom(1)
-      const t = stream.getVideoTracks()[0]
-      const realId = t?.getSettings().deviceId
-      setActiveDeviceId(realId)
-      // カメラ一覧（許可後にラベルが取れる）
-      const cams = await listCameras()
-      setCameras(backCameras(cams))
-      if (phase === 'CAMERA_INIT') setPhase('CALIBRATE')
-    } catch (e: any) {
-      setError('カメラへのアクセスに失敗：' + (e?.message ?? String(e)))
-    }
-  }
-
-  // 初回マウントでカメラを開く
+  // カメラフックがエラーを管理しているので連動
+  useEffect(() => { if (cam.error) setError(cam.error) }, [cam.error])
+  // ストリームが取れたら CALIBRATE へ
   useEffect(() => {
-    openWith()
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      const mr = mrRef.current
-      if (mr && mr.state !== 'inactive') { try { mr.stop() } catch { /* noop */ } }
-      streamRef.current?.getTracks().forEach(t => t.stop())
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (cam.stream && phase === 'CAMERA_INIT') setPhase('CALIBRATE')
+  }, [cam.stream, phase])
+  // アンマウント時のクリーンアップ（rAF と MediaRecorder のみ。ストリームはフックが管理）
+  useEffect(() => () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    const mr = mrRef.current
+    if (mr && mr.state !== 'inactive') { try { mr.stop() } catch { /* noop */ } }
   }, [])
-
-  // ── ズーム適用 ──
-  const setZoom = async (z: number) => {
-    if (zoomCap.supported) {
-      const ok = await applyHardwareZoom(streamRef.current, z)
-      if (ok) {
-        setZoomCap(c => ({ ...c, current: z }))
-        return
-      }
-    }
-    // ハードウェアズーム非対応 → CSS scale（解析座標も補正が必要なため簡易扱い）
-    setDigitalZoom(z)
-  }
 
   // ── キャリブクリック ──
   const onCalibClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -213,7 +162,7 @@ export function LiveBallTracerPage() {
 
   // ── 録画開始/停止 ──
   const startRec = () => {
-    const stream = streamRef.current
+    const stream = cam.stream
     if (!stream) return
     chunksRef.current = []
     if (recordedBlob) { URL.revokeObjectURL(recordedBlob.url); setRecordedBlob(null) }
@@ -267,10 +216,10 @@ export function LiveBallTracerPage() {
       <div className={`relative bg-black rounded-xl overflow-hidden aspect-video ${phase === 'CALIBRATE' ? 'cursor-crosshair' : ''}`}
         onClick={onCalibClick}>
         <video ref={videoRef} playsInline muted autoPlay
-          style={{ transform: `scale(${digitalZoom})`, transformOrigin: 'center center' }}
+          style={{ transform: `scale(${cam.digitalZoom})`, transformOrigin: 'center center' }}
           className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
         <canvas ref={overlayRef}
-          style={{ transform: `scale(${digitalZoom})`, transformOrigin: 'center center' }}
+          style={{ transform: `scale(${cam.digitalZoom})`, transformOrigin: 'center center' }}
           className="absolute inset-0 w-full h-full pointer-events-none" />
 
         {phase === 'CAMERA_INIT' && (
@@ -305,14 +254,7 @@ export function LiveBallTracerPage() {
 
       {/* カメラ選択 ＋ ズーム（CALIBRATE と LIVE で共通表示） */}
       {phase !== 'CAMERA_INIT' && (
-        <CameraControls
-          cameras={cameras}
-          activeId={activeDeviceId}
-          onSwitch={(id) => openWith(id)}
-          zoomCap={zoomCap}
-          digitalZoom={digitalZoom}
-          onZoom={setZoom}
-        />
+        <CameraToolbar cam={cam} disabled={recording} />
       )}
 
       {/* CALIBRATE 操作 */}
@@ -534,83 +476,6 @@ function Cell({ label, value }: { label: string; value: string }) {
     <div>
       <div className="text-lg font-black text-court-accent">{value}</div>
       <div className="text-[10px] text-gray-400">{label}</div>
-    </div>
-  )
-}
-
-function CameraControls({ cameras, activeId, onSwitch, zoomCap, digitalZoom, onZoom }: {
-  cameras: CameraDeviceInfo[]
-  activeId?: string
-  onSwitch: (id?: string) => void
-  zoomCap: ZoomCapability
-  digitalZoom: number
-  onZoom: (z: number) => void
-}) {
-  const HINT_LABEL: Record<CameraDeviceInfo['hint'], string> = {
-    ULTRA_WIDE: '🌐 超広角',
-    WIDE: '📐 広角',
-    STANDARD: '📷 標準',
-    TELE: '🔭 望遠',
-  }
-  // 表示用：ハードズームがあれば current、無ければ digitalZoom
-  const currentZoom = zoomCap.supported ? zoomCap.current : digitalZoom
-  const zoomMin = zoomCap.supported ? zoomCap.min : 1
-  const zoomMax = zoomCap.supported ? zoomCap.max : 3
-  const zoomStep = zoomCap.supported ? zoomCap.step : 0.1
-
-  return (
-    <div className="bg-court-card rounded-xl p-3 space-y-2">
-      {/* カメラ切替 */}
-      {cameras.length > 1 && (
-        <div>
-          <div className="text-xs text-gray-400 mb-1">カメラ（広角／標準／望遠を切替）</div>
-          <div className="grid grid-cols-2 gap-2">
-            {cameras.map(c => (
-              <button key={c.deviceId} onClick={() => onSwitch(c.deviceId)}
-                className={`py-2 px-2 rounded text-xs font-bold text-left ${
-                  c.deviceId === activeId ? 'bg-court-accent text-white' : 'bg-court-surface text-gray-300'
-                }`}>
-                <div>{HINT_LABEL[c.hint]}</div>
-                <div className="text-[9px] opacity-70 truncate">{c.label}</div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      {cameras.length <= 1 && (
-        <div className="text-[10px] text-gray-500">
-          この端末からは追加カメラを検出できませんでした。
-          {/* iOS Safari 等では enumerateDevices が制限されることがあります */}
-        </div>
-      )}
-
-      {/* ズーム */}
-      <div>
-        <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-          <span>
-            {zoomCap.supported ? '🔍 光学ズーム' : '🔍 デジタルズーム（CSS）'}
-          </span>
-          <span className="font-mono text-court-info">{currentZoom.toFixed(1)}×</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => onZoom(Math.max(zoomMin, currentZoom - zoomStep))}
-            className="w-9 h-9 bg-court-surface text-white rounded text-lg active:scale-95">−</button>
-          <input type="range"
-            min={zoomMin} max={zoomMax} step={zoomStep}
-            value={currentZoom}
-            onChange={e => onZoom(Number(e.target.value))}
-            className="flex-1 accent-court-accent" />
-          <button onClick={() => onZoom(Math.min(zoomMax, currentZoom + zoomStep))}
-            className="w-9 h-9 bg-court-surface text-white rounded text-lg active:scale-95">＋</button>
-          <button onClick={() => onZoom(1)}
-            className="px-2 h-9 bg-court-surface text-court-info text-xs rounded">1×</button>
-        </div>
-        {!zoomCap.supported && (
-          <div className="text-[10px] text-gray-500 mt-1">
-            この端末は光学ズーム非対応。CSS で見た目だけ拡大します（解析精度は変化なし）。
-          </div>
-        )}
-      </div>
     </div>
   )
 }

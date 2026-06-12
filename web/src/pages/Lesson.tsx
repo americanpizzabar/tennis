@@ -10,6 +10,8 @@ import { analyzeSession } from '../lib/coachingFeedback'
 import { saveLessonReport } from '../lib/db'
 import type { LessonReport, SavedFrame } from '../types/lesson'
 import { KEY_LANDMARKS } from '../types/lesson'
+import { useCameraDevice, type CameraDeviceState } from '../hooks/useCameraDevice'
+import { CameraToolbar } from '../components/CameraToolbar'
 
 /** MediaRecorder で使える最適な MIME を選ぶ。 */
 function pickVideoMime(): string {
@@ -55,7 +57,7 @@ export function LessonPage() {
   const cancelRef = useRef(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
+  const liveCam = useCameraDevice(videoRef, { audio: false, autoStart: false })
   const framesRef = useRef<PoseFrame[]>([])
   const rafRef = useRef<number | null>(null)
   const recordStartRef = useRef(0)
@@ -84,25 +86,10 @@ export function LessonPage() {
   useEffect(() => {
     if (source !== 'LIVE') return
     if (phase !== 'CAMERA_SETUP' && phase !== 'RECORDING') return
-    const start = async () => {
-      try {
-        if (!streamRef.current) {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'environment' },
-            audio: false,
-          })
-          streamRef.current = stream
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream
-            await videoRef.current.play()
-          }
-        }
-      } catch (e: any) {
-        setError('カメラへのアクセスに失敗しました：' + (e?.message ?? String(e)))
-      }
-    }
-    start()
+    if (!liveCam.stream) liveCam.openInitial().catch(() => { /* error は hook 経由で setError される */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, source])
+  useEffect(() => { if (liveCam.error) setError(liveCam.error) }, [liveCam.error])
 
   // ── クリーンアップ ──
   useEffect(() => () => {
@@ -112,11 +99,9 @@ export function LessonPage() {
     if (mr && mr.state !== 'inactive') {
       try { mr.stop() } catch { /* noop */ }
     }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop())
-      streamRef.current = null
-    }
+    liveCam.stop()
     if (uploadedUrl) URL.revokeObjectURL(uploadedUrl)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploadedUrl])
 
   // ── ライブカメラ用：推論ループ ──
@@ -173,7 +158,7 @@ export function LessonPage() {
     setRecording(true)
 
     // MediaRecorder で実映像を同時録画（撮影しながら解析）
-    const stream = streamRef.current
+    const stream = liveCam.stream
     if (stream && typeof MediaRecorder !== 'undefined') {
       const mime = pickVideoMime()
       try {
@@ -404,6 +389,7 @@ export function LessonPage() {
           onQualityChange={setPendingQuality}
           onStart={startRecording}
           onStop={stopRecordingAndAnalyze}
+          cam={liveCam}
         />
       )}
 
@@ -534,7 +520,7 @@ function SourceSelector({ onLive, onUpload }: {
 
 function CameraPanel({
   videoRef, previewLm, modelReady, recording, elapsed, framesCount,
-  quality, onQualityChange, onStart, onStop,
+  quality, onQualityChange, onStart, onStop, cam,
 }: {
   videoRef: React.RefObject<HTMLVideoElement>;
   previewLm: PoseFrame | null;
@@ -546,12 +532,15 @@ function CameraPanel({
   onQualityChange: (q: PoseQuality) => void;
   onStart: () => void;
   onStop: () => void;
+  cam: CameraDeviceState;
 }) {
   const detected = !!previewLm?.landmarks
   return (
     <div className="space-y-3">
       <div className="relative bg-black rounded-xl overflow-hidden aspect-video">
-        <video ref={videoRef} playsInline muted className="absolute inset-0 w-full h-full object-contain" />
+        <video ref={videoRef} playsInline muted autoPlay
+          style={{ transform: `scale(${cam.digitalZoom})`, transformOrigin: 'center center' }}
+          className="absolute inset-0 w-full h-full object-contain" />
         <SkeletonOverlay
           landmarks={previewLm?.landmarks ?? null}
           videoRef={videoRef}
@@ -580,6 +569,9 @@ function CameraPanel({
           </div>
         )}
       </div>
+
+      {/* カメラ：広角／ズーム（録画中は無効化） */}
+      <CameraToolbar cam={cam} disabled={recording} />
 
       {/* 精度モード切替（録画前のみ） */}
       {!recording && (

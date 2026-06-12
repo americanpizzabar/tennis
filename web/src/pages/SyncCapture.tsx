@@ -5,6 +5,8 @@ import {
 } from '../lib/syncSession'
 import { saveSyncSession } from '../lib/db'
 import type { SyncClip, SyncSessionRecord } from '../types/sync'
+import { useCameraDevice } from '../hooks/useCameraDevice'
+import { CameraToolbar } from '../components/CameraToolbar'
 
 function pickVideoMime(): string {
   const candidates = [
@@ -65,7 +67,7 @@ export function SyncCapturePage() {
 
   const sessionRef = useRef<SyncSession | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
+  const liveCam = useCameraDevice(videoRef, { audio: true, autoStart: false })
   const mrRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
 
@@ -80,27 +82,11 @@ export function SyncCapturePage() {
   // ── カメラ起動 ──
   useEffect(() => {
     if (step === 'PICK_ROLE') return
-    if (streamRef.current) return
-    navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'environment' },
-      audio: true,   // 音声があると後で同期検証にも使える
-    }).then(stream => {
-      streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        videoRef.current.play().catch(() => { /* noop */ })
-      }
-    }).catch(e => setError('カメラへのアクセスに失敗：' + (e?.message ?? String(e))))
+    if (liveCam.stream) return
+    liveCam.openInitial().catch(() => { /* error は hook が setError 連動 */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step])
-
-  // 接続フェーズで <video> が未マウント → LOBBY に来た時に映像が出ない問題の修正。
-  // <video> が DOM に登場した瞬間に srcObject を再アタッチする。
-  useEffect(() => {
-    if (videoRef.current && streamRef.current && !videoRef.current.srcObject) {
-      videoRef.current.srcObject = streamRef.current
-      videoRef.current.play().catch(() => { /* noop */ })
-    }
-  }, [step])
+  useEffect(() => { if (liveCam.error) setError(liveCam.error) }, [liveCam.error])
 
   // ── クリーンアップ ──
   useEffect(() => () => {
@@ -108,8 +94,9 @@ export function SyncCapturePage() {
     if (recElapsedTimerRef.current) clearInterval(recElapsedTimerRef.current)
     const mr = mrRef.current
     if (mr && mr.state !== 'inactive') { try { mr.stop() } catch { /* noop */ } }
-    streamRef.current?.getTracks().forEach(t => t.stop())
+    liveCam.stop()
     sessionRef.current?.close()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ── SyncSession 構築（イベント配線） ──
@@ -244,7 +231,7 @@ export function SyncCapturePage() {
   }
 
   const beginLocalRecording = () => {
-    const stream = streamRef.current
+    const stream = liveCam.stream
     if (!stream) { setError('カメラ未準備のため録画できません'); return }
     chunksRef.current = []
     const mime = pickVideoMime()
@@ -392,7 +379,9 @@ export function SyncCapturePage() {
       {(step === 'LOBBY' || step === 'RECORDING' || step === 'TRANSFER' || step === 'DONE') && (
         <>
           <div className="relative bg-black rounded-xl overflow-hidden aspect-video">
-            <video ref={videoRef} playsInline muted className="absolute inset-0 w-full h-full object-cover" />
+            <video ref={videoRef} playsInline muted autoPlay
+              style={{ transform: `scale(${liveCam.digitalZoom})`, transformOrigin: 'center center' }}
+              className="absolute inset-0 w-full h-full object-cover" />
             <div className="absolute top-2 left-2 bg-black/60 rounded px-2 py-1 text-xs font-bold text-court-accent">
               {CAMERA_LABEL[myCamera]}
             </div>
@@ -410,6 +399,11 @@ export function SyncCapturePage() {
           </div>
 
           <SyncQuality offsetMs={offsetMs} rttMs={rttMs} />
+
+          {/* カメラ：広角／ズーム（録画前のみ） */}
+          {step === 'LOBBY' && (
+            <CameraToolbar cam={liveCam} />
+          )}
 
           {step === 'LOBBY' && (
             <LobbyControls
